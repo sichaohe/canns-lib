@@ -207,8 +207,12 @@ fn ripser_dm_sparse(
 
 /// Python module definition
 #[pymodule]
-fn _ripser_core(m: &Bound<'_, PyModule>) -> PyResult<()> {
-    m.add_function(wrap_pyfunction!(ripser_dm, m)?)?;
-    m.add_function(wrap_pyfunction!(ripser_dm_sparse, m)?)?;
+fn canns_lib(m: &Bound<'_, PyModule>) -> PyResult<()> {
+    // Register _ripser_core submodule
+    let ripser_module = PyModule::new(m.py(), "_ripser_core")?;
+    ripser_module.add_function(wrap_pyfunction!(ripser_dm, m)?)?;
+    ripser_module.add_function(wrap_pyfunction!(ripser_dm_sparse, m)?)?;
+    m.add_submodule(&ripser_module)?;
+
     Ok(())
 }
