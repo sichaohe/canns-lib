@@ -225,19 +225,52 @@ impl<T> CompressedSparseMatrix<T> {
 
 // Optimized SoA layout version, specifically for DiameterEntryT
 //
-// `bounds` is `u32`, not `usize`. It stores ENTRY offsets, not column numbers,
-// and the entry count is bounded by the number of reduction columns actually
-// populated -- 298,670 at dim=2 on the ASA matrix. But `append_column` is called
-// once per ENUMERATED column, 286,562,199 times at dim=2, so at 8 B per push
-// this one line wrote 2.29 GB and, with `Vec` doubling, copied another ~4.6 GB
-// on the way there. Halving the element to 4 B halves both.
+// `bounds` used to be `Vec<u32>` with ONE ENTRY PER ENUMERATED COLUMN: it
+// stored the end offset of that column's entries, so the offset of column
+// `i` was `bounds[i]`. `append_column` runs once per enumerated column --
+// 286,562,199 times at dim=2 on the ASA matrix -- so the array itself was
+// 1.15 GB at dim=2 (403 MB at the T threshold), and every one of those
+// writes was a cache line that carried no information: the overwhelming
+// majority of the columns are APPARENT pairs, which push no entries at
+// all, so their offsets are all equal to the previous column's.
+//
+// The array is now a list of (column, end offset) pairs, one per NON-EMPTY
+// column: 298,670 of them at dim=2, i.e. 2.4 MB instead of 1.15 GB. The
+// columns are processed in increasing order, so the pairs are sorted by
+// column number and a column's range is found with a binary search. The
+// semantics are unchanged: `subrange(c)` returns exactly the entries that
+// were pushed while column `c` was being processed, and an empty column
+// returns an empty range -- which is what the old dense array gave, since
+// `bounds[i] == bounds[i-1]` for a column with no entries.
+//
+// The binary search is O(log n) in the number of non-empty columns, and
+// `subrange` is called once per reduction round (116,926 at dim=2 on the
+// ASA matrix), so the extra work is a rounding error.
 #[derive(Debug, Clone)]
 pub struct OptimizedSparseMatrix {
-    bounds: Vec<u32>,
+    bounds: Vec<ColumnBound>,
     diameters: Vec<f32>,
     indices: Vec<IndexT>,
     coefficients: Vec<CoefficientT>,
+    /// The column currently being filled, set by `begin_column`.
+    current_column: u32,
+    /// The column of the last entry in `bounds`, or `NO_COLUMN` when there
+    /// is none. Compared against `current_column` to learn whether the
+    /// current column already has a bound.
+    last_column: u32,
 }
+
+/// The end offset of one non-empty column.
+#[derive(Debug, Clone, Copy)]
+struct ColumnBound {
+    column: u32,
+    end: u32,
+}
+
+/// Sentinel for "no column" -- no real column number can be this large
+/// (the enumerated column count is bounded by C(n, 3), and the `u32` field
+/// already limits it to 4.29e9 columns).
+const NO_COLUMN: u32 = u32::MAX;
 
 impl OptimizedSparseMatrix {
     #[allow(clippy::new_without_default)]
@@ -247,58 +280,110 @@ impl OptimizedSparseMatrix {
             diameters: Vec::new(),
             indices: Vec::new(),
             coefficients: Vec::new(),
+            current_column: NO_COLUMN,
+            last_column: NO_COLUMN,
         }
     }
 
+    /// The number of NON-EMPTY columns (the columns that actually stored a
+    /// reduction column). It is not the number of enumerated columns: the
+    /// old dense array had one slot per enumerated column, of which the
+    /// overwhelming majority were empty.
     pub fn size(&self) -> usize {
         self.bounds.len()
     }
 
-    /// Reserve the full column count up front. The caller knows it exactly
-    /// (`columns_to_reduce.len()`), and without this the doubling reallocation
-    /// copies every byte written so far once per doubling -- ~2.3x the traffic
-    /// for a vector that is then filled sequentially.
-    pub fn reserve_columns(&mut self, columns: usize) {
-        self.bounds.reserve_exact(columns);
-    }
-
-    pub fn append_column(&mut self) {
+    /// Start filling column `column`. Every entry pushed until the next
+    /// `begin_column` belongs to it.
+    pub fn begin_column(&mut self, column: usize) {
         debug_assert!(
-            self.diameters.len() <= u32::MAX as usize,
-            "reduction column entry count exceeds the u32 offset field"
+            column < NO_COLUMN as usize,
+            "enumerated column number does not fit the u32 field"
         );
-        self.bounds.push(self.diameters.len() as u32);
+        self.current_column = column as u32;
     }
 
     #[inline(always)]
     pub fn push_back(&mut self, diameter: f32, index: IndexT, coefficient: CoefficientT) {
+        debug_assert!(
+            self.current_column != NO_COLUMN,
+            "push_back without begin_column"
+        );
+        debug_assert!(
+            self.diameters.len() <= u32::MAX as usize,
+            "reduction column entry count exceeds the u32 offset field"
+        );
+        // The first entry of a column opens its bound; the rest only extend
+        // it. An empty column never reaches this point, so it never gets a
+        // bound -- which is the whole point of the layout.
+        if self.last_column != self.current_column {
+            self.bounds.push(ColumnBound {
+                column: self.current_column,
+                end: self.diameters.len() as u32,
+            });
+            self.last_column = self.current_column;
+        }
         self.diameters.push(diameter);
         self.indices.push(index);
         self.coefficients.push(coefficient);
         if let Some(last) = self.bounds.last_mut() {
-            *last = self.diameters.len() as u32;
+            last.end = self.diameters.len() as u32;
         }
     }
 
     pub fn pop_back(&mut self) {
-        if !self.diameters.is_empty() {
-            self.diameters.pop();
-            self.indices.pop();
-            self.coefficients.pop();
-            if let Some(last) = self.bounds.last_mut() {
-                *last = self.diameters.len() as u32;
+        if self.diameters.is_empty() {
+            return;
+        }
+        self.diameters.pop();
+        self.indices.pop();
+        self.coefficients.pop();
+        if self.bounds.is_empty() {
+            return;
+        }
+        // Where the last bound's column began.
+        let start = if self.bounds.len() >= 2 {
+            self.bounds[self.bounds.len() - 2].end as usize
+        } else {
+            0
+        };
+        let new_end = self.diameters.len();
+        let last = self.bounds.len() - 1;
+        if new_end == start {
+            // The column just became EMPTY, so its bound goes away with it.
+            // The bound before it now ends where the entries end -- it used
+            // to end at this column's first entry.
+            self.bounds.pop();
+            self.last_column = NO_COLUMN;
+            if let Some(prev) = self.bounds.last_mut() {
+                prev.end = new_end as u32;
             }
+        } else {
+            self.bounds[last].end = new_end as u32;
         }
     }
 
+    /// The entries pushed while column `column` was being filled.
+    ///
+    /// A column with no entries returns an empty range, exactly as the old
+    /// dense `bounds` array did (`bounds[i] == bounds[i-1]`).
     #[inline(always)]
-    pub fn subrange(&self, index: usize) -> (&[f32], &[IndexT], &[CoefficientT]) {
-        let start = if index == 0 {
+    pub fn subrange(&self, column: usize) -> (&[f32], &[IndexT], &[CoefficientT]) {
+        let c = column as u32;
+        let idx = self.bounds.partition_point(|b| b.column < c);
+        if idx >= self.bounds.len() || self.bounds[idx].column != c {
+            return (
+                &self.diameters[0..0],
+                &self.indices[0..0],
+                &self.coefficients[0..0],
+            );
+        }
+        let start = if idx == 0 {
             0
         } else {
-            self.bounds[index - 1] as usize
+            self.bounds[idx - 1].end as usize
         };
-        let end = self.bounds[index] as usize;
+        let end = self.bounds[idx].end as usize;
         (
             &self.diameters[start..end],
             &self.indices[start..end],
@@ -414,5 +499,167 @@ impl HasCofacets for SparseDistanceMatrix {
             binomial_coeff,
             modulus,
         )
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The layout this one replaced: one `u32` per ENUMERATED column,
+    /// holding the end offset of that column's entries. Kept here as the
+    /// reference the sparse layout is checked against -- the two must agree
+    /// on every column, including the empty ones.
+    struct DenseBounds {
+        bounds: Vec<u32>,
+        diameters: Vec<f32>,
+        indices: Vec<IndexT>,
+        coefficients: Vec<CoefficientT>,
+    }
+
+    impl DenseBounds {
+        fn new(n_columns: usize) -> Self {
+            Self {
+                bounds: Vec::with_capacity(n_columns),
+                diameters: Vec::new(),
+                indices: Vec::new(),
+                coefficients: Vec::new(),
+            }
+        }
+
+        fn append_column(&mut self) {
+            self.bounds.push(self.diameters.len() as u32);
+        }
+
+        fn push_back(&mut self, diameter: f32, index: IndexT, coefficient: CoefficientT) {
+            self.diameters.push(diameter);
+            self.indices.push(index);
+            self.coefficients.push(coefficient);
+            if let Some(last) = self.bounds.last_mut() {
+                *last = self.diameters.len() as u32;
+            }
+        }
+
+        fn subrange(&self, column: usize) -> (&[f32], &[IndexT], &[CoefficientT]) {
+            let start = if column == 0 {
+                0
+            } else {
+                self.bounds[column - 1] as usize
+            };
+            let end = self.bounds[column] as usize;
+            (
+                &self.diameters[start..end],
+                &self.indices[start..end],
+                &self.coefficients[start..end],
+            )
+        }
+    }
+
+    /// A deterministic sequence of (column, number of entries) pairs that
+    /// mixes empty columns, single-entry columns and fat ones.
+    fn sample_columns(n_columns: usize) -> Vec<(usize, usize)> {
+        let mut state: u64 = 0x2545_F491_4F6C_DD1D;
+        let mut next = move || {
+            state ^= state << 13;
+            state ^= state >> 7;
+            state ^= state << 17;
+            state
+        };
+        (0..n_columns)
+            .map(|c| {
+                let r = next();
+                // ~70% of the columns are empty, like the apparent pairs.
+                let n = if r % 10 < 7 {
+                    0
+                } else {
+                    1 + (r / 10 % 5) as usize
+                };
+                (c, n)
+            })
+            .collect()
+    }
+
+    #[test]
+    fn subrange_matches_the_old_dense_bounds() {
+        let columns = sample_columns(500);
+        let mut sparse = OptimizedSparseMatrix::new();
+        let mut dense = DenseBounds::new(columns.len());
+        let mut next_diameter = 0.5f32;
+
+        for &(column, n_entries) in &columns {
+            sparse.begin_column(column);
+            dense.append_column();
+            for k in 0..n_entries {
+                let diameter = next_diameter;
+                next_diameter += 1.0;
+                let index = (column * 31 + k) as IndexT;
+                let coefficient = ((k % 5) + 1) as CoefficientT;
+                sparse.push_back(diameter, index, coefficient);
+                dense.push_back(diameter, index, coefficient);
+            }
+        }
+
+        for &(column, _) in &columns {
+            let (sd, si, sc) = sparse.subrange(column);
+            let (dd, di, dc) = dense.subrange(column);
+            assert_eq!(sd, dd, "diameters differ in column {}", column);
+            assert_eq!(si, di, "indices differ in column {}", column);
+            assert_eq!(sc, dc, "coefficients differ in column {}", column);
+        }
+    }
+
+    #[test]
+    fn empty_columns_have_empty_ranges() {
+        let mut m = OptimizedSparseMatrix::new();
+        m.begin_column(0);
+        m.push_back(1.0, 7, 1);
+        m.begin_column(1); // empty
+        m.begin_column(2);
+        m.push_back(2.0, 9, 1);
+        m.push_back(3.0, 10, 2);
+
+        assert_eq!(m.subrange(0).0, &[1.0]);
+        assert_eq!(m.subrange(1).0.len(), 0);
+        assert_eq!(m.subrange(2).0, &[2.0, 3.0]);
+        assert_eq!(m.subrange(2).1, &[9, 10]);
+        assert_eq!(m.subrange(2).2, &[1, 2]);
+        // A column that was never begun is empty as well.
+        assert_eq!(m.subrange(3).0.len(), 0);
+        // Two non-empty columns, not three.
+        assert_eq!(m.size(), 2);
+    }
+
+    #[test]
+    fn a_later_non_empty_column_is_found_after_empty_ones() {
+        let mut m = OptimizedSparseMatrix::new();
+        for column in 0..10 {
+            m.begin_column(column);
+        }
+        m.begin_column(10);
+        m.push_back(5.0, 42, 1);
+        assert_eq!(m.subrange(10).0, &[5.0]);
+        assert_eq!(m.subrange(9).0.len(), 0);
+        assert_eq!(m.subrange(0).0.len(), 0);
+    }
+
+    #[test]
+    fn pop_back_removes_the_bound_of_a_column_that_became_empty() {
+        let mut m = OptimizedSparseMatrix::new();
+        m.begin_column(0);
+        m.push_back(1.0, 1, 1);
+        m.begin_column(1);
+        m.push_back(2.0, 2, 1);
+        assert_eq!(m.size(), 2);
+        // Popping the only entry of column 1 empties it, so its bound goes
+        // away -- and column 0's bound now ends where the entries end.
+        m.pop_back();
+        assert_eq!(m.size(), 1);
+        assert_eq!(m.subrange(1).0.len(), 0);
+        assert_eq!(m.subrange(0).0, &[1.0]);
+        // Popping the only entry of column 0 empties it as well.
+        m.pop_back();
+        assert_eq!(m.size(), 0);
+        assert_eq!(m.subrange(0).0.len(), 0);
+        assert_eq!(m.subrange(1).0.len(), 0);
     }
 }
