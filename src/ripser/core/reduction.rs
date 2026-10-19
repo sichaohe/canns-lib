@@ -1229,10 +1229,10 @@ where
         // Avoid multi-GiB virtual reservations for mostly trivial reduction columns.
         let initial_entries = columns_to_reduce.len().saturating_mul(10).min(1 << 20);
         reduction_matrix_soa.reserve(initial_entries);
-        // The column count is known exactly and `append_column` runs once per
-        // enumerated column, so reserve it rather than let the Vec double its
-        // way to 2.29 GB at dim=2 and copy every byte written on the way.
-        reduction_matrix_soa.reserve_columns(columns_to_reduce.len());
+        // The bounds array holds one entry per NON-EMPTY column (298,670 at
+        // dim=2 on the ASA matrix), not one per enumerated column, so it needs
+        // no up-front reservation: the old `reserve_columns(columns_to_reduce.len())`
+        // reserved 1.15 GB of u32 for a structure that holds 2.4 MB.
 
         // Pre-allocate working buffers with estimated capacity based on problem size
         let estimated_working_size = std::cmp::min(1000, columns_to_reduce.len());
@@ -1623,7 +1623,9 @@ where
 
             let t = std::time::Instant::now();
             let mut a = 0f32;
-            for e in gpu_pre.iter() {
+            // `ApparentRecords` keeps the population in a pinned buffer; the
+            // flat per-column view is `as_slice()`.
+            for e in gpu_pre.as_slice().iter() {
                 a += e.get_diameter();
             }
             let d_gpu = t.elapsed().as_secs_f64();
@@ -1786,12 +1788,15 @@ where
                     }
                 }
 
-                // `append_column` MUST stay before the apparent fast path:
+                // `begin_column` MUST stay before the apparent fast path:
                 // `reduction_matrix_soa.subrange(index_column_to_add)` is indexed
-                // by column number, so slot i has to correspond to
-                // `columns_to_reduce[i]` or the pivot lookup reads the wrong
-                // column. Do not "optimise" this away.
-                reduction_matrix_soa.append_column();
+                // by column number, so the store has to know which column it is
+                // filling. Do not "optimise" this away.
+                //
+                // The store keeps one bound per NON-EMPTY column, so this call
+                // does not allocate: a column that pushes no entry (an
+                // apparent pair) never gets a bound at all.
+                reduction_matrix_soa.begin_column(index_column_to_reduce);
 
                 // THE GPU ALREADY KNOWS. The detect kernel computed, per
                 // column, whether the column is an apparent pair AND whether
@@ -2299,7 +2304,7 @@ where
                 for i in 0..n {
                     let c = &columns_to_reduce[i];
                     b.push(i as u32);
-                    let a = &gpu_pre[i];
+                    let a = &gpu_pre.as_slice()[i];
                     if a.get_index() != -1 {
                         sink += c.get_diameter();
                     }
@@ -2322,7 +2327,7 @@ where
                 let mut sink2 = 0f32;
                 for i in 0..n {
                     sink2 += columns_to_reduce[i].get_diameter();
-                    if gpu_pre[i].get_index() != -1 {
+                    if gpu_pre.as_slice()[i].get_index() != -1 {
                         sink2 += 1.0;
                     }
                 }
@@ -2334,7 +2339,7 @@ where
                 let mut sink2 = 0f32;
                 for i in 0..n {
                     sink2 += columns_to_reduce[i].get_diameter();
-                    sink2 += gpu_pre[i].get_diameter();
+                    sink2 += gpu_pre.as_slice()[i].get_diameter();
                 }
             }
             let d_neither = t.elapsed().as_secs_f64();

@@ -89,7 +89,16 @@ md5 = ":".join(hashlib.md5(np.asarray(sorted(map(tuple, x)), dtype="float64").to
 h1 = np.asarray(r[1], dtype="float64")
 life = np.sort(h1[:, 1] - h1[:, 0])[::-1]
 life = life[np.isfinite(life)]
+# Peak resident set of THIS process, after the computation. The
+# reduction's working structures are the bulk of it, so this is where a
+# change in the column store shows up.
+rss = 0
+for line in open("/proc/self/status"):
+    if line.startswith("VmHWM:"):
+        rss = int(line.split()[1])
+        break
 print("WALL %.3f" % wall)
+print("RSS %d" % rss)
 print("BARS " + "|".join(str(len(x)) for x in r))
 print("MD5 " + md5)
 print("H1TOP " + ",".join("%.2f" % x for x in life[:3]))
@@ -149,6 +158,7 @@ def main() -> int:
                     "thresh": thresh,
                     "build": bname,
                     "wall_s": r.get("WALL", ""),
+                    "rss_kb": r.get("RSS", ""),
                     "bars": r.get("BARS", ""),
                     "md5": r.get("MD5", ""),
                     "h1top": r.get("H1TOP", ""),
@@ -163,11 +173,11 @@ def main() -> int:
                 else:
                     rec["verdict"] = "OK"
                 rows.append(rec)
-                print("rep=%d arm=%-8s build=%-6s wall=%-8s gpu_err=%-4r %s %s"
-                      % (rep, arm, bname, rec["wall_s"], rec["gpu_err"],
+                print("rep=%d arm=%-8s build=%-6s wall=%-8s rss_kb=%-10s gpu_err=%-4r %s %s"
+                      % (rep, arm, bname, rec["wall_s"], rec["rss_kb"], rec["gpu_err"],
                          rec["bars"], rec["verdict"]), flush=True)
 
-    fields = ["rep", "arm", "mode", "thresh", "build", "wall_s", "bars",
+    fields = ["rep", "arm", "mode", "thresh", "build", "wall_s", "rss_kb", "bars",
               "md5", "h1top", "gpu_err", "verdict", "rc", "host_elapsed_s"]
     with open(args.out, "w", newline="") as fh:
         w = csv.DictWriter(fh, fieldnames=fields)

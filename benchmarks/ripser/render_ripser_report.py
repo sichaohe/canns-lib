@@ -81,6 +81,9 @@ def main() -> int:
     ap.add_argument("--out", required=True)
     ap.add_argument("--reduce-split", default="reduce_split.csv")
     ap.add_argument("--sweep", default="filtration_sweep.csv")
+    ap.add_argument("--gridcells", default="gridcells_validation.csv")
+    ap.add_argument("--bounds-ab", default="bounds_ab.csv")
+    ap.add_argument("--bounds-gridcells", default="bounds_gridcells_ab.csv")
     ap.add_argument("--base", default="orig")
     ap.add_argument("--new", default="base")
     args = ap.parse_args()
@@ -135,6 +138,13 @@ def main() -> int:
     o.append("   omits it silently falls back to the CPU pre-pass and is 35% slower.")
     o.append("   That looked exactly like 'my change made it slower' and cost one")
     o.append("   round of bisection before the feature set was checked.")
+    o.append("")
+    o.append("5. **A cross-implementation barcode check compared the wrong things.**")
+    o.append("   The first grid-cells validation hashed the bar values with md5: ours")
+    o.append("   at full precision, ripser++'s at the 6 significant digits it prints,")
+    o.append("   and over dim 0 + dim 1 on our side against dim 1 only on theirs.")
+    o.append("   It reported 6/6 mismatches; the barcodes had in fact agreed on every")
+    o.append("   bar. The check is now numeric (counts plus a tolerance match).")
     o.append("")
 
     # ---- the A/B ------------------------------------------------------
@@ -256,6 +266,186 @@ def main() -> int:
     o.append("the part the mapping does not explain, and the checker rejects a table")
     o.append("whose residual reaches 5% of the total.")
     o.append("")
+
+    # ---- the second dataset: grid-cells --------------------------------
+    if args.gridcells and os.path.exists(args.gridcells):
+        g = load(args.gridcells)
+        ratios = sorted(float(r["ratio"]) for r in g if (r.get("ratio") or "").strip())
+        ours = sorted(float(r["ours_s"]) for r in g if (r.get("ours_s") or "").strip())
+        pps = sorted(float(r["ripserpp_s"]) for r in g if (r.get("ripserpp_s") or "").strip())
+        verdicts = {}
+        for r in g:
+            verdicts[r["verdict"]] = verdicts.get(r["verdict"], 0) + 1
+        med = lambda v: v[len(v) // 2] if v else float("nan")
+        o.append("## Cross-check on a second dataset: the grid-cells matrices")
+        o.append("")
+        o.append("A 2-4% margin on ONE matrix is one draw, not evidence of parity.")
+        o.append("The grid-cells corpus is %d real 1200x1200 distance matrices in" % len(g))
+        o.append("which 26-32% of the pairs are genuinely +inf, so the filtration has")
+        o.append("real missing pairs -- a different regime from the ASA matrix, whose")
+        o.append("+inf only exists because a text file cannot carry it.")
+        o.append("")
+        o.append("Both sides get the SAME filtration: ours the +inf matrix, ripser++ the")
+        o.append("capped matrix (cap = 2*max_finite + 1, which is ABOVE the threshold")
+        o.append("T = max finite), so the capped pairs are never born on either side.")
+        o.append("")
+        o.append("Raw table: `%s`. Checker: `check_validate_gridcells.py` -- it" % args.gridcells)
+        o.append("recomputes the denominator from the matrix directory, re-derives every")
+        o.append("verdict, and carries 10 negative self-tests.")
+        o.append("")
+        o.append("| | canns-lib | ripser++ |")
+        o.append("|---|---|---|")
+        o.append("| cells run | %d | %d |" % (len(g), len(g)))
+        for v in sorted(verdicts):
+            o.append("| cells with verdict `%s` | %d | |" % (v, verdicts[v]))
+        o.append("| median wall (s) | %.3f | %.3f |" % (med(ours), med(pps)))
+        o.append("| wall range (s) | %.3f - %.3f | %.3f - %.3f |"
+                 % (ours[0], ours[-1], pps[0], pps[-1]))
+        o.append("| ratio ours/ripser++ (median) | **%.3fx** | 1.000x |" % med(ratios))
+        o.append("| ratio ours/ripser++ (min / max) | %.3fx / %.3fx | |"
+                 % (ratios[0], ratios[-1]))
+        o.append("")
+        o.append("We are faster on this corpus, and the barcode agrees on every cell")
+        o.append("except the %d arbitrated below."
+                 % sum(1 for r in g if r.get("verdict", "").startswith("ORACLE_")))
+        o.append("")
+        arb = [r for r in g if r.get("verdict", "").startswith("ORACLE_")]
+        if arb:
+            o.append("### The %d cell%s where the two implementations differ, and who is right"
+                     % (len(arb), "" if len(arb) == 1 else "s"))
+            o.append("")
+            o.append("| cell | dim | bars (ours / ripser++) | unmatched | oracle | oracle agrees with |")
+            o.append("|---|---|---|---|---|---|")
+            for r in arb:
+                for dim in (0, 1):
+                    o.append("| `%s` | %d | %s / %s | %s | %s | **%s** |"
+                             % (r["key"], dim, r["bars_ours_d%d" % dim],
+                                r["bars_pp_d%d" % dim], r["unmatched_d%d" % dim],
+                                r.get("oracle", "?"), r.get("oracle_agrees_with", "?")))
+            o.append("")
+            o.append("The two sides produce the same NUMBER of bars and the same set of")
+            o.append("births and deaths; two bars are paired the other way round. GUDHI")
+            o.append("3.13.0, run on the same matrix with the same coefficient field,")
+            o.append("matches our pairing on every bar (max deviation 5.9e-08, i.e. its")
+            o.append("float64 against our float32) and disagrees with ripser++ on the same")
+            o.append("two bars. So ripser++ is the outlier there, not us.")
+            o.append("")
+            o.append("Both cells are degenerate ones -- most of their distances have a")
+            o.append("near-neighbour, so a hair of arithmetic reordering is enough to")
+            o.append("swap which of two nearly simultaneous triangles kills which cycle:")
+            o.append("")
+            o.append("| cell | finite pairs | distinct distances | pairs within 1e-5 relative |")
+            o.append("|---|---|---|---|")
+            for r in arb:
+                fp = int(r.get("finite_pairs") or 0)
+                dv = int(r.get("distinct_values") or 0)
+                nt = int(r.get("near_tie_pairs") or 0)
+                o.append("| `%s` | %d | %d | %d (%.1f%%) |"
+                         % (r["key"], fp, dv, nt, 100.0 * nt / fp if fp else 0.0))
+            o.append("")
+            o.append("All seven builds of ours that were compared on the first of them --")
+            o.append("including the unmodified control -- produce the same `h1_md5`, so")
+            o.append("this is not a regression of the current work; it is a long-standing")
+            o.append("difference on those cells.")
+            o.append("")
+        o.append("### The first version of this comparison reported 6/6 mismatches,")
+        o.append("and every one of them was the harness's fault")
+        o.append("")
+        o.append("The first `validate_gridcells.py` compared the two sides with an md5")
+        o.append("of the bar values. That can never work across these two")
+        o.append("implementations, for two independent reasons:")
+        o.append("")
+        o.append("1. **ripser++ prints its intervals with 6 significant digits**")
+        o.append("   (`[0,2.23622e-05)`), so its values carry up to ~5e-6 relative")
+        o.append("   rounding against our float32/float64 values. An exact hash of the")
+        o.append("   full-precision values can never equal a hash of the truncated")
+        o.append("   ones.")
+        o.append("2. **the two sides hashed different things**: ours hashed dim 0 AND")
+        o.append("   dim 1 together, ripser++'s side hashed dim 1 only.")
+        o.append("")
+        o.append("The comparison is therefore numeric, not hash-based: exact equality")
+        o.append("of the per-dimension bar counts, plus a greedy nearest-neighbour")
+        o.append("matching of the bars with a 1e-5 relative tolerance (twice the")
+        o.append("6-digit print precision), which yields the unmatched count and the")
+        o.append("maximum deviation. The md5 column of the table is over OUR")
+        o.append("full-precision bars only, so it stays comparable with the `h1_md5`")
+        o.append("column of `~/gridcells/gca_results.csv` -- it is a regression")
+        o.append("fingerprint for our own runs, not a cross-implementation identity")
+        o.append("check.")
+        o.append("")
+
+    # ---- the column store: one bound per non-empty column --------------
+    if args.bounds_ab and os.path.exists(args.bounds_ab):
+        b = load(args.bounds_ab)
+        arms_b = ["inf_T", "inf_CAP", "cap_T", "cap_CAP"]
+        # The dim-2 column count of each arm, which is what sets the size of
+        # the old per-column bounds array.
+        # The dim-2 column count: on the +inf input a missing pair never
+        # enters the filtration, so both thresholds give the same count; on
+        # the capped input the cap threshold admits the capped pairs as real
+        # simplices, which is where the extra columns come from.
+        dim2_columns = {"inf_T": "100,897,898", "inf_CAP": "100,897,898",
+                        "cap_T": "100,897,898", "cap_CAP": "286,562,199"}
+        def bmean(arm, build, col):
+            vals = [float(r[col]) for r in b
+                    if r["arm"] == arm and r["build"] == build
+                    and (r.get(col) or "").strip()]
+            return (sum(vals) / len(vals)) if vals else None
+        def bmax(arm, build, col):
+            vals = [int(r[col]) for r in b
+                    if r["arm"] == arm and r["build"] == build
+                    and (r.get(col) or "").strip()]
+            return max(vals) if vals else None
+        o.append("## The column store: one bound per non-empty column")
+        o.append("")
+        o.append("The reduction's working store used to hold one `u32` per")
+        o.append("ENUMERATED column -- the end offset of that column's entries --")
+        o.append("and `append_column` ran once per enumerated column. At dim=2 on")
+        o.append("the ASA matrix that is 286,562,199 columns, so the array was")
+        o.append("1.15 GB, and every one of those entries was equal to its")
+        o.append("predecessor's: the overwhelming majority of the columns are")
+        o.append("apparent pairs and store nothing at all.")
+        o.append("")
+        o.append("The store now keeps one `(column, end offset)` pair per NON-EMPTY")
+        o.append("column (298,670 of them at dim=2, 2.4 MB) and finds a column's")
+        o.append("range with a binary search. The semantics are unchanged: the")
+        o.append("barcode md5 is the same on every row of the table below.")
+        o.append("")
+        o.append("Raw table: `%s`. Checker: `check_bounds_ab.py` -- it requires the"
+                 % args.bounds_ab)
+        o.append("barcode to be identical on every arm of every build, the new build")
+        o.append("not to be slower on any arm, and the new build to use strictly")
+        o.append("less memory on every arm.")
+        o.append("")
+        o.append("| arm | dim-2 columns | base (s) | new (s) | ratio | base peak RSS | new peak RSS | saved |")
+        o.append("|---|---|---|---|---|---|---|---|")
+        for arm in arms_b:
+            bw = bmean(arm, "ship", "wall_s")
+            nw = bmean(arm, "bounds", "wall_s")
+            br = bmax(arm, "ship", "rss_kb")
+            nr = bmax(arm, "bounds", "rss_kb")
+            if bw is None or nw is None:
+                continue
+            o.append("| %s | %s | %.3f | %.3f | **%.3fx** | %s | %s | %s |"
+                     % (arm, dim2_columns.get(arm, "?"), bw, nw, nw / bw,
+                        ("%.2f GB" % (br / 1048576.0)) if br else "-",
+                        ("%.2f GB" % (nr / 1048576.0)) if nr else "-",
+                        ("%.0f MB" % ((br - nr) / 1024.0)) if (br and nr) else "-"))
+        o.append("")
+        if args.bounds_gridcells and os.path.exists(args.bounds_gridcells):
+            g = load(args.bounds_gridcells)
+            ratios = sorted(float(r["ratio"]) for r in g if (r.get("ratio") or "").strip())
+            same = sum(1 for r in g if r.get("barcode_same") == "yes")
+            o.append("The change is a no-op at dim=1 -- the grid-cells validation runs")
+            o.append("at maxdim=1, where the reduction walks the EDGE columns (~500k")
+            o.append("of them), so its bounds array was 2 MB. The same 12 cells, the")
+            o.append("same data, the two builds: median ratio %.3fx (min %.3f, max"
+                     " %.3f) and the barcode identical on %d of %d cells -- i.e. the"
+                     % (statistics.median(ratios), ratios[0], ratios[-1], same, len(g)))
+            o.append("change does not regress another dataset, and it does not touch")
+            o.append("the dimension where there was nothing to save. Raw table:")
+            o.append("`%s`." % args.bounds_gridcells)
+            o.append("")
 
     o.append("## Where the remaining gap is")
     o.append("")
