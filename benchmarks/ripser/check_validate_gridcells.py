@@ -225,6 +225,13 @@ def main() -> int:
     args = ap.parse_args()
 
     want = expected_keys(args.matrix_dir)
+    if not want:
+        print("FAIL: no matrices under %s -- this checker has to run on the"
+              % args.matrix_dir)
+        print("      host that holds the grid-cells corpus; it recomputes the")
+        print("      denominator from that directory, and an empty one would")
+        print("      make every cell look missing.")
+        return 1
     fails = check(args.csv, args.matrix_dir)
     with open(args.csv, newline="") as fh:
         n_rows = len(list(csv.DictReader(fh)))
