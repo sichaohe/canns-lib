@@ -27,6 +27,19 @@ use pyo3::prelude::*;
 #[global_allocator]
 static GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc;
 
+// Transparent-huge-page hinting for large allocations, opt-in via the
+// `hugepage` cargo feature. See alloc_hugepage.rs for the measurement that
+// motivates it. Mutually exclusive with mimalloc above: Rust allows exactly
+// one `#[global_allocator]`, and this one wraps the system allocator, so
+// composing the two would need a third wrapper for no measured gain.
+#[cfg(all(feature = "hugepage", not(feature = "mimalloc")))]
+#[global_allocator]
+static GLOBAL: alloc_hugepage::HugePageAlloc<std::alloc::System> =
+    alloc_hugepage::HugePageAlloc(std::alloc::System);
+
+#[cfg(all(feature = "hugepage", not(feature = "mimalloc")))]
+pub mod alloc_hugepage;
+
 // External crate declarations for submodules
 extern crate rand;
 

@@ -3,6 +3,8 @@ pub mod algorithm;
 pub mod assembly;
 #[cfg(feature = "parallel")]
 pub mod lockfree;
+#[cfg(test)]
+mod pivot_micro;
 pub mod reduction;
 
 // Re-export public API

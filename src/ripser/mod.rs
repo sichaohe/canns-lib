@@ -5,7 +5,11 @@ use pyo3::types::PyDict;
 
 mod asa;
 pub mod core;
+pub mod gpu;
+pub mod gpu_assembly;
 pub mod matrix;
+pub mod pivot_sharded;
+pub mod pivot_sorted;
 pub mod types;
 pub mod utils;
 
