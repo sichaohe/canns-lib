@@ -259,6 +259,23 @@ where
 
         // Calculate cofacet diameter efficiently:
         // The diameter is max(original simplex diameter, max distance from new vertex to existing vertices)
+        //
+        // A row-view variant of this loop (borrowing row `v` once instead of
+        // re-reading `row_offsets[v]` per element) was tried and measured
+        // NEUTRAL: +0.04% at n=300, +1.6% at n=500. The compiler already
+        // hoists it -- `row_offsets` is 9.6 KB and L1-resident -- so the loop
+        // is not bound by that load. Not worth the extra trait surface.
+        //
+        // A SOFTWARE PREFETCH of the next few rows (this loop walks `v`
+        // downward, so the upcoming rows are known) was also tried and came out
+        // NEUTRAL: two interleaved passes disagreed in sign (+4.1%, -1.5%)
+        // with a pre-pass difference of 1.3%, inside run-to-run noise. Do not
+        // retry. Two reasons it cannot work here: `has_next()` depends only on
+        // `v` and the binomial table, never on the distances just loaded, so
+        // the out-of-order engine already overlaps one cofacet's misses with
+        // the next; and prefetching 3 rows x 3 columns to serve 3 real loads is
+        // a 3x instruction amplification that offsets any residual gain.
+        // Latency in this loop is already covered by speculation.
         let mut cofacet_diameter = self.simplex.get_diameter();
         for &w in &self.vertices[..self.num_vertices] {
             let d = self.dist.get(self.v as usize, w as usize);
@@ -269,14 +286,24 @@ where
             self.idx_above + self.binomial_coeff.get(self.v, self.k + 1) + self.idx_below;
         self.v -= 1;
 
-        let sign = if self.k & 1 != 0 {
+        // `sign * base mod modulus`. Two divisions avoided, both provably
+        // behaviour-preserving: `modp` on an already-reduced value is the
+        // identity, and when `base == 1` (the initial coboundary of a simplex
+        // always has coefficient 1) `sign` is already in [0, modulus).
+        let sign: i32 = if self.k & 1 != 0 {
             (self.modulus - 1) as i32
         } else {
             1
         };
         let base = self.simplex.get_coefficient() as i32;
-        let coeff = ((sign * base) % (self.modulus as i32)) as CoefficientT;
-        let cofacet_coefficient = modp(coeff, self.modulus);
+        let cofacet_coefficient: CoefficientT = if base == 1 {
+            sign as CoefficientT
+        } else {
+            modp(
+                ((sign * base) % (self.modulus as i32)) as CoefficientT,
+                self.modulus,
+            )
+        };
 
         DiameterEntryT::new(cofacet_diameter, cofacet_index, cofacet_coefficient)
     }

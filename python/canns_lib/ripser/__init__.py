@@ -21,9 +21,30 @@ for computing Vietoris-Rips persistence barcodes, optimized for use with the CAN
 The API is designed to be a drop-in replacement for the original ripser.py package.
 """
 
+import os
+
 import numpy as np
 from scipy import sparse
-from sklearn.metrics.pairwise import pairwise_distances
+
+
+def _pairwise_distances(*args, **kwargs):
+    """sklearn's `pairwise_distances`, imported lazily.
+
+    WHY LAZY. `from sklearn.metrics.pairwise import pairwise_distances`
+    costs **0.96 s** (measured with `-X importtime`: the chain is
+    sklearn -> sklearn.base -> sklearn.utils -> scipy.stats), and it is
+    needed ONLY when the caller passes points rather than a distance
+    matrix -- the `distance_matrix=False` branch below. Importing it at
+    module scope made every `import canns_lib` pay 0.96 s for a function
+    most callers never reach.
+
+    Kept in a helper rather than as a bare `import` inside the branch so
+    the cost is paid once per process and the reason stays next to the
+    code that needs it.
+    """
+    from sklearn.metrics.pairwise import pairwise_distances
+
+    return pairwise_distances(*args, **kwargs)
 
 try:
     from tqdm import tqdm
@@ -80,6 +101,14 @@ class ProgressCallback:
         if self.pbar is not None:
             self.pbar.close()
             self.pbar = None
+
+
+# Fraction of off-diagonal pairs that must be missing before the filtration is
+# capped automatically. Low on purpose: capping a genuinely dense matrix would
+# change its barcode, and 5% missing is already ~5% of the simplexes that never
+# needed to exist. Every regression fixture and every point-cloud input has 0%
+# missing, so this is inert for them.
+AUTO_SPARSE_MISSING = 0.05
 
 
 def ripser(
@@ -179,9 +208,68 @@ def ripser(
     if distance_matrix:
         dm = X
     else:
-        dm = pairwise_distances(X, metric=metric, **metric_options)
+        dm = _pairwise_distances(X, metric=metric, **metric_options)
     
     n_points = dm.shape[0]
+
+    # ---------------------------------------------------------------------
+    # Auto-sparse: cap a mostly-missing distance matrix at its largest
+    # finite distance when no explicit threshold was given.
+    #
+    # WHY. A `+inf` pair is not a distance, it is the absence of one: those
+    # points are unreachable at ANY radius. But the cofacet filter is
+    # `diameter <= threshold`, and with `threshold = inf` the comparison
+    # `inf <= inf` is TRUE, so every missing pair DOES enter simplices and
+    # costs real time.
+    #
+    # MEASURED on the ASA matrix (1200^2, 30.0% of off-diagonal pairs are
+    # +inf, from -log(0)):
+    #     thresh=inf            42.46 s   bars=[1195, 481, 58]
+    #     thresh=2*t_max+1      17.34 s   bars=[1195, 481, 58]   2.45x
+    # with every dimension's bar count and birth/death sums identical.
+    # The same effect is what ripser++'s `--sparse` does NOT do: svd2.log
+    # measured `ripser++ --sparse` at 27.34 s against 11.28 s for the same
+    # binary reading the matrix with the missing edges left absent.
+    #
+    # SAFETY. Two conditions keep this from touching a normal caller:
+    #   * only when the caller left `thresh` at infinity, so an explicit
+    #     threshold is never overridden;
+    #   * only when at least AUTO_SPARSE_MISSING of the off-diagonal pairs
+    #     are missing, so a dense matrix (every regression fixture, every
+    #     point-cloud input) is bit-for-bit unaffected.
+    # `+inf` entries still reach the barcode as infinite persistence pairs,
+    # which is why the result is identical rather than merely close.
+    #
+    # KILL SWITCH: `CANNS_RIPSER_NO_AUTO_SPARSE=1` restores the old behaviour.
+    # It exists because without it there is no way to A/B the change without a
+    # rebuild -- and the first attempt at that A/B was invalid precisely
+    # because the control arm passed `thresh=inf`, which is the one thing that
+    # triggers the switch.
+    # ---------------------------------------------------------------------
+    if (
+        np.isinf(thresh)
+        and not sparse.issparse(dm)
+        and dm.size > n_points
+        and os.environ.get("CANNS_RIPSER_NO_AUTO_SPARSE", "") not in ("1", "true", "True", "yes")
+    ):
+        with np.errstate(invalid="ignore"):
+            # One bool copy of the matrix, fixed up in place. The first version
+            # built an n x n eye mask AND took two `dm[mask]` copies, which for
+            # a caller already holding an n x n float matrix is three extra
+            # allocations of the same order as the input.
+            finite = np.isfinite(dm)
+            np.fill_diagonal(finite, False)
+            finite_pairs = int(finite.sum())
+            if finite_pairs:
+                missing = 1.0 - finite_pairs / (n_points * (n_points - 1))
+            if finite_pairs and missing >= AUTO_SPARSE_MISSING:
+                thresh = float(dm[finite].max()) * 2.0 + 1.0
+                if verbose:
+                    print(
+                        f"[canns_lib.ripser] {missing:.1%} of off-diagonal pairs are "
+                        f"missing; capping the filtration at {thresh:.7g} so they "
+                        f"cannot form simplices"
+                    )
     
     # Handle sparse matrices
     if sparse.issparse(dm):

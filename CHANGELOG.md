@@ -5,6 +5,20 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Fixed
+- **The ripser distance-matrix path no longer takes the sparse route on a dense matrix.** `rips_dm_with_callback_and_interval` switched to the sparse distance matrix whenever `threshold < max_finite`. Any pipeline that replaces missing (`+inf`) distances with a finite cap — the ASA pipeline caps them at `2*max_finite + 1` — therefore raised `max_finite` to the cap, and every threshold below the cap satisfied the condition, so an ordinary dense matrix was walked down the sparse path. In this implementation the sparse path is the slower one: the walk counters and the barcode are identical on both routes, but the sparse arm took 4.3x as long, because the dense enumerator rejects a capped pair with a single comparison while the sparse enumerator walks adjacency lists. The decision now requires the matrix to actually contain missing pairs. Measured on the 1200x1200 ASA matrix: the capped arm went from 49.419 s to 11.979 s, the other three arms were unchanged.
+
+### Changed
+- **The reduction's working column heap is now a hand-rolled `CoboundaryHeap`.** `std::collections::BinaryHeap::pop` uses `sift_down_to_bottom`, which always walks the hole to the bottom of the tree. A single column's coboundary heap grows to 9-11 million entries (148-185 MB) before it is drained, so the bottom of the tree is a cold cache line on every pop; ripser++ uses `std::priority_queue`, whose `pop` is the classic top-down sift-down with an early exit. The new heap implements that variant and is the default; the `binary-heap` cargo feature restores `BinaryHeap`. Measured on the ASA matrix: 6.5% faster on the `+inf` input and 6.9% faster on the capped input, three interleaved repetitions each, with a byte-identical barcode. The unit test `pop_order_matches_binary_heap` pins the pop order against `BinaryHeap`, and `pops_in_reduction_order` pins the reduction order.
+- **The modulus cancellation in the reduction no longer divides.** The two coefficients are always smaller than the modulus, so a single conditional subtraction replaces the integer division. The coefficients are also summed in `i32` rather than `i16`; the old `i16` addition overflowed for a modulus above 16383.
+- **`import canns_lib` no longer imports scikit-learn eagerly.** `sklearn.metrics.pairwise.pairwise_distances` is only needed when the caller passes points instead of a distance matrix, and importing it at module scope cost 0.96 s on every import.
+- **Maturin builds now enable the `hugepage` cargo feature** on Linux. It marks allocations of 2 MB or more with `MADV_HUGEPAGE`, which is worth 1.24x end to end on the real ASA workload (119.4 s -> 96.0 s, three interleaved passes, bitwise-identical barcode on all 224 regression cells) because the pivot map is a single ~13 GB allocation whose insert cost is dominated by page faults and TLB misses rather than hashing. It is a no-op on non-Linux. Build with `--no-default-features` to opt out.
+
+### Added
+- **`gpu` cargo feature** — an opt-in GPU apparent-pair pre-pass, off by default so that the released wheel still builds without a CUDA toolkit. The kernels in `kernel/` are compiled by `nvcc` when it is available and fall back to NVRTC, or to the CPU, when it is not. Measured on an A100-SXM4-80GB with the same 2.9e8 columns as the ASA matrix: the CPU pre-pass takes 12.0-15.5 s against 0.093 s for the GPU kernel plus 0.095 s for the pinned readback.
+
 ## [0.11.0] - 2026-09-23
 
 ### Breaking

@@ -59,7 +59,16 @@ version-from-cargo = true
 # Enable parallel features by default for releases. The `extension-module`
 # feature is also required so PyO3 produces a cdylib (not a libpython-linked
 # binary) when maturin invokes cargo. See Cargo.toml for the rationale.
-features = ["parallel", "extension-module"]
+#
+# `hugepage` marks allocations >= 2 MB with MADV_HUGEPAGE. On the real ASA
+# workload it is worth 1.24x end to end (measured: 119.4 s -> 96.0 s mean over
+# three interleaved passes) with a bitwise-identical barcode on all 224
+# regression cells, because the pivot map is a single ~13 GB allocation and
+# 92% of its insert cost is page faults and TLB misses rather than hashing.
+# It is a no-op on non-Linux. Build with `--no-default-features` (or drop the
+# feature) to opt out: on a host with `defrag=madvise` under memory pressure a
+# marked region can stall while the kernel compacts.
+features = ["parallel", "hugepage", "extension-module"]
 
 [dependency-groups]
 dev = [

@@ -60,6 +60,21 @@ impl BinomialCoeffTable {
     }
 
     #[inline(always)]
+    /// Raw table, laid out k-major as `b[k * n_max + n]`.
+    ///
+    /// Exposed for the GPU path: the CUDA kernel indexes the same table
+    /// directly, and copying 1201*7 i64s is far cheaper than re-deriving the
+    /// coefficients per thread. Layout is documented on `get`.
+    pub fn as_slice(&self) -> &[IndexT] {
+        &self.b
+    }
+
+    /// Stride of the k-major layout. The GPU kernel needs this because it
+    /// cannot hardcode it for an arbitrary point count.
+    pub fn n_max(&self) -> usize {
+        self.n_max
+    }
+
     pub fn get(&self, n: IndexT, k: IndexT) -> IndexT {
         // Keep debug assertions but optimize access pattern
         debug_assert!(n >= 0 && k >= 0);

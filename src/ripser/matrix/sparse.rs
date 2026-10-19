@@ -224,9 +224,16 @@ impl<T> CompressedSparseMatrix<T> {
 }
 
 // Optimized SoA layout version, specifically for DiameterEntryT
+//
+// `bounds` is `u32`, not `usize`. It stores ENTRY offsets, not column numbers,
+// and the entry count is bounded by the number of reduction columns actually
+// populated -- 298,670 at dim=2 on the ASA matrix. But `append_column` is called
+// once per ENUMERATED column, 286,562,199 times at dim=2, so at 8 B per push
+// this one line wrote 2.29 GB and, with `Vec` doubling, copied another ~4.6 GB
+// on the way there. Halving the element to 4 B halves both.
 #[derive(Debug, Clone)]
 pub struct OptimizedSparseMatrix {
-    bounds: Vec<usize>,
+    bounds: Vec<u32>,
     diameters: Vec<f32>,
     indices: Vec<IndexT>,
     coefficients: Vec<CoefficientT>,
@@ -247,8 +254,20 @@ impl OptimizedSparseMatrix {
         self.bounds.len()
     }
 
+    /// Reserve the full column count up front. The caller knows it exactly
+    /// (`columns_to_reduce.len()`), and without this the doubling reallocation
+    /// copies every byte written so far once per doubling -- ~2.3x the traffic
+    /// for a vector that is then filled sequentially.
+    pub fn reserve_columns(&mut self, columns: usize) {
+        self.bounds.reserve_exact(columns);
+    }
+
     pub fn append_column(&mut self) {
-        self.bounds.push(self.diameters.len());
+        debug_assert!(
+            self.diameters.len() <= u32::MAX as usize,
+            "reduction column entry count exceeds the u32 offset field"
+        );
+        self.bounds.push(self.diameters.len() as u32);
     }
 
     #[inline(always)]
@@ -257,7 +276,7 @@ impl OptimizedSparseMatrix {
         self.indices.push(index);
         self.coefficients.push(coefficient);
         if let Some(last) = self.bounds.last_mut() {
-            *last = self.diameters.len();
+            *last = self.diameters.len() as u32;
         }
     }
 
@@ -267,7 +286,7 @@ impl OptimizedSparseMatrix {
             self.indices.pop();
             self.coefficients.pop();
             if let Some(last) = self.bounds.last_mut() {
-                *last = self.diameters.len();
+                *last = self.diameters.len() as u32;
             }
         }
     }
@@ -277,9 +296,9 @@ impl OptimizedSparseMatrix {
         let start = if index == 0 {
             0
         } else {
-            self.bounds[index - 1]
+            self.bounds[index - 1] as usize
         };
-        let end = self.bounds[index];
+        let end = self.bounds[index] as usize;
         (
             &self.diameters[start..end],
             &self.indices[start..end],
