@@ -313,7 +313,7 @@ def compare(a, b):
     return n, dev, max(ua, ub)
 
 
-def row_extra(side, prov_gpu, prov_cpu, pp_md5, cpu_md5, threads, dev):
+def row_extra(side, prov_gpu, prov_cpu, pp_md5, cpu_md5, threads, device):
     """The identity of the build that produced a row.
 
     Our rows carry the source fingerprint, the md5 of the extension that
@@ -322,7 +322,7 @@ def row_extra(side, prov_gpu, prov_cpu, pp_md5, cpu_md5, threads, dev):
     scale scan and the head-to-head table.
     """
     out = {"loadavg": open("/proc/loadavg").read().split()[0],
-           "gpu": dev, "threads": "", "commit": "", "build_md5": ""}
+           "gpu": device, "threads": "", "commit": "", "build_md5": ""}
     if side == "gpu":
         out["commit"], out["build_md5"] = prov_gpu
         out["threads"] = threads
@@ -363,9 +363,9 @@ def main() -> int:
     pp_md5 = binary_md5(PP)
     cpu_md5 = binary_md5(RIPserCPU)
     threads = len(os.sched_getaffinity(0))
-    _env, dev = gpu_env()
+    _env, device = gpu_env()
     print("device=%s  commit(gpu)=%s  md5(gpu)=%s  md5(cpu)=%s  threads=%d"
-          % (dev, prov_gpu[0], prov_gpu[1], prov_cpu[1], threads), flush=True)
+          % (device, prov_gpu[0], prov_gpu[1], prov_cpu[1], threads), flush=True)
 
     rows = []
     for key, _fname, kind, maxdim, pp_args, exp_file in DATASETS:
@@ -450,7 +450,9 @@ def main() -> int:
                              # A side that did not finish inside the timeout is
                              # a RESULT (it says the implementation cannot do
                              # this instance), not a missing row.
-                             "verdict": "TIMEOUT" if reps else "MISSING"})
+                             "verdict": "TIMEOUT" if reps else "MISSING",
+                             **row_extra(side, prov_gpu, prov_cpu, pp_md5,
+                                         cpu_md5, threads, device)})
                 continue
             dims = sorted(bars)
             total = sum(len(v) for v in bars.values())
@@ -459,9 +461,12 @@ def main() -> int:
             if pp_bars is not None:
                 unmatched = 0
                 for d in dims:
-                    _n, dev, un = compare(bars[d], pp_bars.get(d, []))
+                    # NOT `dev`: that name is the DEVICE, and the comparison
+                    # returns a relative deviation -- a shadowing bug once
+                    # wrote the deviation into the table's `gpu` column.
+                    _n, ddev, un = compare(bars[d], pp_bars.get(d, []))
                     unmatched += un
-                    devs.append(dev)
+                    devs.append(ddev)
                 m_pp = "yes" if unmatched == 0 else "no"
             if expected:
                 # The published expected barcodes only cover the dimensions
@@ -474,9 +479,9 @@ def main() -> int:
                 unmatched = 0
                 devs = []
                 for d in sorted(expected):
-                    _n, dev, un = compare(bars.get(d, []), expected[d])
+                    _n, ddev, un = compare(bars.get(d, []), expected[d])
                     unmatched += un
-                    devs.append(dev)
+                    devs.append(ddev)
                 m_exp = "yes" if unmatched == 0 else "no"
             ok = (m_exp == "yes")
             for (rep, w, proc, rss) in reps:
@@ -493,7 +498,7 @@ def main() -> int:
                     "verdict": ("SAME_BARCODE" if ok else "BARCODE_MISMATCH")
                                if w is not None else "TIMEOUT",
                     **row_extra(side, prov_gpu, prov_cpu, pp_md5, cpu_md5,
-                                threads, dev),
+                                threads, device),
                 })
             print("   %-14s %-8s bars=%d match_expected=%s %s"
                   % (key, side, total, m_exp,
