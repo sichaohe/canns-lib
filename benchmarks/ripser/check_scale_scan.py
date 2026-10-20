@@ -153,11 +153,19 @@ def check(path, sizes=None):
                              % (n, side))
             if not (r.get("loadavg") or "").strip():
                 fails.append("n=%d %s: no load average recorded" % (n, side))
-            # the build identity, on our side
+            # the build identity. On our side it is the source fingerprint
+            # and the thread count; on the reference side it is the md5 of
+            # the binary that produced the row -- the convention the
+            # head-to-head table uses as well.
             for col in PROVENANCE_COLUMNS:
-                if not (r.get(col) or "").strip():
-                    fails.append("n=%d %s: the row does not record %s"
-                                 % (n, side, col))
+                if side in OURS:
+                    if not (r.get(col) or "").strip():
+                        fails.append("n=%d %s: the row does not record %s"
+                                     % (n, side, col))
+                elif col == "build_md5":
+                    if not (r.get(col) or "").strip():
+                        fails.append("n=%d %s: the row does not record %s"
+                                     % (n, side, col))
             # the library clock cannot be larger than the process clock
             lib = (r.get("lib_wall_s") or "").strip()
             if lib:
