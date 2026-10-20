@@ -324,7 +324,7 @@ def main() -> int:
     pp_md5 = md5_of(PP)
     threads = len(os.sched_getaffinity(0))
     env, dev = gpu_env()
-    print("commit=%s  our_md5=%s  ref_md5=%s  threads=%d  device=%d"
+    print("commit=%s  our_md5=%s  ref_md5=%s  threads=%d  device=%s"
           % (commit, our_md5, pp_md5, threads, dev), flush=True)
 
     rows = []
