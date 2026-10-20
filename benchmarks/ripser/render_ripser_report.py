@@ -84,6 +84,9 @@ def main() -> int:
     ap.add_argument("--gridcells", default="gridcells_validation.csv")
     ap.add_argument("--bounds-ab", default="bounds_ab.csv")
     ap.add_argument("--bounds-gridcells", default="bounds_gridcells_ab.csv")
+    ap.add_argument("--gpucopy", default="gpucopy_ab.csv")
+    ap.add_argument("--standard", default="standard_bench.csv")
+    ap.add_argument("--gridbench", default="gca_results_final.csv")
     ap.add_argument("--base", default="orig")
     ap.add_argument("--new", default="base")
     args = ap.parse_args()
@@ -139,7 +142,28 @@ def main() -> int:
     o.append("   That looked exactly like 'my change made it slower' and cost one")
     o.append("   round of bisection before the feature set was checked.")
     o.append("")
-    o.append("5. **A cross-implementation barcode check compared the wrong things.**")
+    o.append("5. **Two tables of the SAME comparison quoted two different wall**")
+    o.append("   **clocks.** The head-to-head quoted our `ripser()` call against")
+    o.append("   ripser++'s own `total time:`, while the filtration sweep quoted")
+    o.append("   our call against ripser++'s PROCESS wall -- which also carries its")
+    o.append("   CUDA init and the 17 MB text load. The sweep therefore flattered")
+    o.append("   us by ~0.5 s, and the two tables of one comparison disagreed by")
+    o.append("   5% (1.002x against 1.051x). Both tables now carry both")
+    o.append("   conventions (`wall_s` = library wall on both sides, `proc_s` =")
+    o.append("   process wall on both sides), and the comparison is made on the")
+    o.append("   library wall, which is the conservative one for us.")
+    o.append("")
+    o.append("6. **The comparison charged us an initialisation ripser++ did not**")
+    o.append("   **pay for.** ripser++'s `total time:` excludes its one-time CUDA")
+    o.append("   context creation: its process wall is 10.81 s against an internal")
+    o.append("   10.34 s. Our FIRST call in a process pays 0.32 s of the same --")
+    o.append("   the CUDA context and the PTX module load -- and it was inside the")
+    o.append("   measured region, so the head-to-head was comparing our cold call")
+    o.append("   against ripser++'s warm one. The harness now measures the SECOND")
+    o.append("   call on our side, and the table reports the cold first call and")
+    o.append("   the single-call process wall next to it.")
+    o.append("")
+    o.append("7. **A cross-implementation barcode check compared the wrong things.**")
     o.append("   The first grid-cells validation hashed the bar values with md5: ours")
     o.append("   at full precision, ripser++'s at the 6 significant digits it prints,")
     o.append("   and over dim 0 + dim 1 on our side against dim 1 only on theirs.")
@@ -207,7 +231,8 @@ def main() -> int:
             return (sum(vals) / len(vals)) if vals else None
         o.append("## Both filtrations, one interleaved batch")
         o.append("")
-        o.append("Raw table: `%s` (checker: `check_filtration_sweep.py`, which also")
+        o.append("Raw table: `%s` (checker: `check_filtration_sweep.py`, which also"
+                 % args.sweep)
         o.append("asserts that the two input forms of a filtration agree on the")
         o.append("barcode -- the check that would have caught the original error).")
         o.append("")
@@ -236,11 +261,49 @@ def main() -> int:
     o.append("ASA matrix), 501,964 dim-1 columns, 100,897,898 dim-2 columns, 1734")
     o.append("bars, barcode md5 `ee1f5283...` on our side.")
     o.append("")
+    # The process wall is the other convention: the whole process, so it
+    # includes the interpreter start, the import and the .npy load on our
+    # side, and the CUDA init and the text load on ripser++'s. It is the
+    # number a user sees, and it is NOT the number the library comparison
+    # is made on.
+    ours_proc = mean_col(h2h, "ours", "proc_s")
+    pp_proc = mean_col(h2h, "ripserpp", "proc_s")
+    ours_cold = mean_col(h2h, "ours", "wall_cold_s")
     o.append("| | canns-lib | ripser++ | ratio |")
     o.append("|---|---|---|---|")
-    o.append("| library wall (s) | %.3f | %.3f | **%.3fx** |" % (ours_wall, pp_wall, ours_wall / pp_wall))
+    o.append("| library wall, warm (s) | %.3f | %.3f | **%.3fx** |" % (ours_wall, pp_wall, ours_wall / pp_wall))
+    if ours_cold:
+        o.append("| library wall, first call in the process (s) | %.3f | n/a | |" % ours_cold)
+    if ours_proc and pp_proc:
+        # Our child makes TWO calls (a warm-up and the measured one), so its
+        # process wall covers both. Subtracting the measured call leaves the
+        # cost of ONE call from a cold process, which is the number a user
+        # with a single matrix sees -- and the one ripser++'s single-shot
+        # process reports.
+        o.append("| process wall, one call from a cold process (s) | %.3f | %.3f | **%.3fx** |"
+                 % (ours_proc - ours_wall, pp_proc, (ours_proc - ours_wall) / pp_proc))
     o.append("| bars | 1195/481/58 | 1734 | same |")
     o.append("")
+    o.append("The warm row is the comparison, and the reason it is the warm row")
+    o.append("is in the corrections below: ripser++'s `total time:` excludes its own")
+    o.append("one-time CUDA initialisation, and ours had to be measured the same way")
+    o.append("for the two to mean the same thing. The cold rows are the")
+    o.append("user-visible cost of a single matrix in a fresh process, where we")
+    o.append("pay 0.32 s of CUDA context creation that ripser++ also pays -- but")
+    o.append("outside its own timer.")
+    o.append("")
+    if ours_proc and pp_proc:
+        o.append("Three clocks are in the table and they are not the same")
+        o.append("measurement: the warm library wall (our `ripser()` call against")
+        o.append("ripser++'s own `total time:`, each side's own I/O, start-up and")
+        o.append("one-time CUDA initialisation excluded), the first call in a fresh")
+        o.append("process (which pays the CUDA context creation), and the whole")
+        o.append("process.")
+        o.append("")
+        o.append("The warm row is the comparison because it is the only one that")
+        o.append("measures the same thing on both sides. The earlier tables quoted")
+        o.append("the sweep's ripser++ PROCESS wall against our library wall, which")
+        o.append("is how two tables of one comparison ended up disagreeing by 5%.")
     o.append("### Stage-by-stage")
     o.append("")
     o.append("| stage | canns-lib (s) | ripser++ (s) | difference (s) | CSV column |")
@@ -447,6 +510,192 @@ def main() -> int:
             o.append("`%s`." % args.bounds_gridcells)
             o.append("")
 
+    # ---- the GPU pre-pass: the last change -----------------------------
+    gpucopy_rows = []
+    if args.gpucopy and os.path.exists(args.gpucopy):
+        gpucopy_rows = load(args.gpucopy)
+    if gpucopy_rows:
+        o.append("## The GPU apparent pre-pass: two host-side copies removed")
+        o.append("")
+        o.append("The GPU pre-pass detects, for every column, whether the column is")
+        o.append("an apparent pair. The kernel needs the simplex index of each")
+        o.append("column, and the host holds it inside 16-byte records, so the")
+        o.append("indices had to be gathered out -- and then they were copied AGAIN")
+        o.append("on the way into the driver, which keeps the copy as the device")
+        o.append("slice's host buffer.")
+        o.append("")
+        o.append("Measured at dim=2 (100,897,898 columns) with the")
+        o.append("`gpu-phase-stats` build, the pieces were: the serial gather")
+        o.append("0.25 s, the second copy 0.23 s, and the PCIe transfer they fed")
+        o.append("0.077 s. Two thirds of the cost of getting 807 MB to the GPU was")
+        o.append("host-side copying.")
+        o.append("")
+        o.append("The gather is now parallel and the second copy is gone -- the")
+        o.append("vector is moved into the device slice, so the driver reads it in")
+        o.append("place. The pre-pass goes from 0.667 s to 0.236 s, with a")
+        o.append("byte-identical barcode.")
+        o.append("")
+        o.append("| arm | base (s) | new (s) | ratio |")
+        o.append("|---|---|---|---|")
+        for arm in ("inf_T", "inf_CAP", "cap_T", "cap_CAP"):
+            bb = [float(r["wall_s"]) for r in gpucopy_rows
+                  if r["arm"] == arm and r["build"] == "ship3"]
+            nn = [float(r["wall_s"]) for r in gpucopy_rows
+                  if r["arm"] == arm and r["build"] == "ship4"]
+            if bb and nn:
+                o.append("| %s | %.3f | %.3f | **%.3fx** |"
+                         % (arm, statistics.mean(bb), statistics.mean(nn),
+                            statistics.mean(nn) / statistics.mean(bb)))
+        o.append("")
+        o.append("Raw table: `gpucopy_ab.csv`; the barcode md5 is identical on")
+        o.append("every row of every arm.")
+        o.append("")
+    o.append("### The one-time cost the phase table never showed")
+    o.append("")
+    o.append("The dim-1 gap was a one-time cost: 0.32 s of CUDA context creation")
+    o.append("and PTX module load, paid on the first dimension of the first call")
+    o.append("and never again in that process. It showed up as an unexplained")
+    o.append("0.32 s between the start of `compute_pairs` and the start of the")
+    o.append("reduction loop at dim 1, and nowhere at dim 2 -- which is what a")
+    o.append("one-time cost looks like. It is also exactly what ripser++ leaves")
+    o.append("outside its own `total time:`, which is why the comparison now")
+    o.append("measures the warm call on our side too.")
+    o.append("")
+
+    # ---- the standard PH benchmark suite -------------------------------
+    if args.standard and os.path.exists(args.standard):
+        sb = load(args.standard)
+        by_ds = {}
+        for r in sb:
+            by_ds.setdefault(r["dataset"], {})[r["side"]] = r
+        o.append("## The standard benchmark suite: where we win and where we do not")
+        o.append("")
+        o.append("Every number above comes from ONE matrix. The suite ripser++")
+        o.append("publishes is the other half of the claim, and it has a different")
+        o.append("shape: smaller instances, a point cloud as well as distance")
+        o.append("matrices, dimension counts up to 3, and -- decisively --")
+        o.append("filtrations that REDUCE HEAVILY instead of being")
+        o.append("apparent-dominated.")
+        o.append("")
+        o.append("Raw table: `%s`. Checker: `check_standard_bench.py` -- it requires"
+                 % args.standard)
+        o.append("every side to reproduce ripser++'s published expected barcodes")
+        o.append("AND to agree with ripser++ run here, on every dimension, and it")
+        o.append("computes the denominator from the dataset list.")
+        o.append("")
+        o.append("| dataset | maxdim | ripser++ GPU | canns GPU | ratio | canns CPU | ripser CPU (C++ ref) | bars |")
+        o.append("|---|---|---|---|---|---|---|---|")
+        order = ["dragon1000", "HIV", "celegans", "sphere_3_192", "Vicsek300",
+                 "o3_4096"]
+        for ds in order:
+            row = by_ds.get(ds, {})
+            def w(side):
+                v = (row.get(side) or {}).get("wall_s", "")
+                return "%.2f s" % float(v) if v else ("timeout" if
+                        (row.get(side) or {}).get("verdict") == "TIMEOUT" else "-")
+            pg = row.get("pp_gpu", {})
+            g = row.get("gpu", {})
+            try:
+                ratio = "**%.3fx**" % (float(g["wall_s"]) / float(pg["wall_s"]))
+            except (KeyError, ValueError, ZeroDivisionError):
+                ratio = "-"
+            o.append("| %s | %s | %s | %s | %s | %s | %s | %s |"
+                     % (ds, pg.get("maxdim", "?"), w("pp_gpu"), w("gpu"), ratio,
+                        w("cpu"), w("ripser_cpu"), pg.get("bars_total", "?")))
+        o.append("")
+        o.append("**The barcodes agree everywhere.** Every side of every dataset")
+        o.append("reproduces ripser++'s published expected barcodes and agrees with")
+        o.append("ripser++ run here, on every dimension -- not only the two the")
+        o.append("published file contains.")
+        o.append("")
+        o.append("**The performance is mixed, and the pattern is the point.** On the")
+        o.append("apparent-dominated instances we are 0.91-0.95x ripser++; on the")
+        o.append("heavy-reduction ones we are 1.04-1.05x; on o3_4096 -- a 3D point")
+        o.append("cloud at dim 3 -- we are 2.8x SLOWER. The reason is measurable:")
+        o.append("on o3_4096 the dim-1 apparent-pair count is ZERO, so the fast")
+        o.append("path that carries the neural-activity workload does not exist")
+        o.append("there, and the time goes into the reduction rounds instead")
+        o.append("(`push_s` 4.2 / 7.2 / 7.8 s at dim 1 / 2 / 3).")
+        o.append("")
+        o.append("**The CPU position, stated correctly.** Our CPU build is not")
+        o.append("close to OUR GPU (1.5-2.4x). It is close to ripser++'s GPU")
+        o.append("(1.3-1.4x), because the reference CPU implementation -- the")
+        o.append("`ripser` C++ binary from ripser++'s own tree -- needs 7-10x that")
+        o.append("on the dim-2 instances and does not finish the dim-3 ones inside")
+        o.append("a three-minute timeout at all.")
+        o.append("")
+
+    # ---- the grid-cells corpus: the 485-cell main benchmark -------------
+    if args.gridbench and os.path.exists(args.gridbench):
+        gc = load(args.gridbench)
+        def gmed(target, form, col="wall_s"):
+            v = sorted(float(r[col]) for r in gc
+                       if r["target"] == target and r["input_form"] == form
+                       and (r.get(col) or "").strip())
+            return v[len(v) // 2] if v else None
+        def gsum(target, form, col="wall_s"):
+            return sum(float(r[col]) for r in gc
+                       if r["target"] == target and r["input_form"] == form
+                       and (r.get(col) or "").strip())
+        def gcount(target, form):
+            return sum(1 for r in gc if r["target"] == target
+                       and r["input_form"] == form)
+        arms2 = [("canns-gpu", "inf_preserved"), ("canns-gpu", "capped"),
+                 ("canns-cpu", "inf_preserved"), ("canns-cpu", "capped"),
+                 ("ripserpp", "capped")]
+        o.append("## The neural-recording corpus: 485 cells")
+        o.append("")
+        o.append("The corpus's own main benchmark: every grid-cell matrix, five")
+        o.append("arms, %d cells. The input form is an explicit axis because"
+                 % len(gc))
+        o.append("keeping the `+inf` instead of capping it is a different")
+        o.append("filtration, and ripser++ cannot express `+inf` at all.")
+        o.append("")
+        o.append("Raw table: `%s`. Checker: `check_gridcells_bench.py` -- the"
+                 % args.gridbench)
+        o.append("denominator is computed from the matrix directory, the four")
+        o.append("canns-lib arms of a matrix must agree on the barcode, and the")
+        o.append("manifest's own reference must be reproduced.")
+        o.append("")
+        o.append("| arm | cells | median (s) | total (s) | peak RSS median (MB) |")
+        o.append("|---|---|---|---|---|")
+        for target, form in arms2:
+            med = gmed(target, form)
+            rss = gmed(target, form, "peak_rss_kb")
+            o.append("| %s / %s | %d | %.3f | %.1f | %.0f |"
+                     % (target, form, gcount(target, form), med or 0.0,
+                        gsum(target, form), (rss or 0) / 1024.0))
+        o.append("")
+        gi, gc2 = gmed("canns-gpu", "inf_preserved"), gmed("canns-gpu", "capped")
+        cpu_i = gmed("canns-cpu", "inf_preserved")
+        pp = gmed("ripserpp", "capped")
+        if gi and gc2 and cpu_i and pp:
+            o.append("* keeping the `+inf` instead of capping it: **%.3fx**"
+                     % (gc2 / gi))
+            o.append("  (the capped arm computes the simplices that can never")
+            o.append("  join the filtration -- the corpus's own docstring calls")
+            o.append("  this worth 2.4x, and it measures %.3fx here)" % (gc2 / gi))
+            o.append("* our GPU build against our CPU build at maxdim=1: "
+                     "**%.3fx** -- at dim 1 the reduction walks the EDGE columns"
+                     % (gi / cpu_i))
+            o.append("  (719,400 of them at n=1200), which is below the")
+            o.append("  threshold at which the GPU pre-pass engages, so the GPU")
+            o.append("  machinery is pure overhead there. The `GPU` label does")
+            o.append("  not travel to these numbers.")
+            o.append("* our GPU build against ripser++: **%.3fx** (median cell)"
+                     % (gi / pp))
+            o.append("* our CPU build against ripser++'s GPU: **%.3fx** -- on"
+                     % (cpu_i / pp))
+            o.append("  this corpus the CPU build is the faster of our two, for")
+            o.append("  the reason in the previous bullet.")
+            o.append("")
+        o.append("The barcode is checked three ways per cell: the four canns-lib")
+        o.append("arms must agree with each other, the manifest's reference (the")
+        o.append("H1 top-3 the dataset authors computed with canns 1.0.2.dev /")
+        o.append("canns-lib 0.7.0) must be reproduced, and ripser++'s arm must")
+        o.append("report the same number of bars.")
+        o.append("")
+
     o.append("## Where the remaining gap is")
     o.append("")
     o.append("Every difference below is read out of the stage table above (column")
@@ -461,7 +710,8 @@ def main() -> int:
             by.setdefault(r["side"], {})[r["dim"]] = r
         o.append("### The reduction does the SAME work on both sides")
         o.append("")
-        o.append("Raw table: `%s`. The four count columns must be identical for the")
+        o.append("Raw table: `%s`. The four count columns must be identical for the"
+                 % args.reduce_split)
         o.append("two implementations to be doing the same work; `check_reduce_split.py`")
         o.append("rejects the table if any of them differs, and its negative self-test")
         o.append("shows it catches a one-round difference.")

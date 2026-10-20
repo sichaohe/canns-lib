@@ -41,6 +41,25 @@ REQUIRED = ["matrix", "target", "input_form", "wall_s", "peak_rss_kb",
             "loadavg"]
 
 
+def same_top3(a, b, rtol=1e-6):
+    """The manifest writes the lifetimes with "/" and two decimals; the driver
+    writes them with "|" and whatever precision the value had. Compare the
+    NUMBERS, not the strings."""
+    def parse(t):
+        parts = [p for p in t.replace("|", "/").replace(",", "/").split("/") if p.strip()]
+        try:
+            return [float(p) for p in parts]
+        except ValueError:
+            return None
+    pa, pb = parse(a), parse(b)
+    if pa is None or pb is None or len(pa) != len(pb):
+        return a.strip() == b.strip()
+    for x, y in zip(pa, pb):
+        if abs(x - y) > rtol * max(1.0, abs(x)):
+            return False
+    return True
+
+
 def expected_matrices(matrix_dir=MATRIX_DIR):
     if not os.path.isdir(matrix_dir):
         return []
@@ -104,7 +123,7 @@ def check(path, matrix_dir=MATRIX_DIR):
         for r in canns:
             ref = (r.get("ref_h1_top3") or "").strip()
             got = (r.get("h1_top3") or "").strip()
-            if ref and got and ref != got:
+            if ref and got and not same_top3(ref, got):
                 fails.append("%s/%s/%s: the H1 top-3 %s does not reproduce the "
                              "manifest reference %s"
                              % (m, r["target"], r["input_form"], got, ref))
@@ -132,7 +151,12 @@ def mutate(src, dst, kind):
                 r["h1_md5"] = "deadbeef" * 4
                 break
     elif kind == "break_reference":
-        rows[0]["h1_top3"] = "999.00,888.00,777.00"
+        # A row that actually HAS a manifest reference: the first matrix may
+        # not have one, and then the mutation would be invisible.
+        for r in rows:
+            if (r.get("ref_h1_top3") or "").strip():
+                r["h1_top3"] = "999.00,888.00,777.00"
+                break
     elif kind == "zero_time":
         rows[0]["wall_s"] = "0"
     elif kind == "no_loadavg":
