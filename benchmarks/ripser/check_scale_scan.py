@@ -82,21 +82,6 @@ def check(path, sizes=None, max_loadavg=0.0):
             fails.append("unexpected size: n=%d" % n)
 
     for n, sides in by.items():
-<<<<<<< HEAD
-        inf, cap, pp = sides.get("ours_inf"), sides.get("ours_capped"), \
-            sides.get("ripserpp")
-        if inf and cap:
-            if inf["md5"] and cap["md5"] and inf["md5"] != cap["md5"]:
-                fails.append("n=%d: the +inf and the capped input form give "
-                             "different barcodes (%s against %s) -- the two "
-                             "forms must be the same filtration"
-                             % (n, inf["md5"], cap["md5"]))
-        if inf and pp:
-            if inf["bars"] and pp["bars"] and inf["bars"] != pp["bars"]:
-                fails.append("n=%d: ripser++ reports %s bars, we report %s"
-                             % (n, pp["bars"], inf["bars"]))
-        for side, r in sides.items():
-=======
         # Every arm that computes the same filtration must report the same
         # number of bars. The reference implementation is not run-to-run
         # reproducible on this workload (its GPU reduction order varies, and
@@ -142,7 +127,6 @@ def check(path, sizes=None, max_loadavg=0.0):
                 fails.append("n=%d %s: the arm failed (%s: %s) -- a failure is "
                              "not a measurement" % (n, side, err, note))
                 continue
->>>>>>> d78f3da (fix(bench): the scale scan must fail loudly when an arm produces no number)
             try:
                 if float(r["wall_s"]) <= 0:
                     fails.append("n=%d %s: non-positive wall time" % (n, side))
