@@ -57,6 +57,7 @@ import time
 import numpy as np
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import foreign_cpu
 from validate_gridcells import match_bars  # the tolerance matcher, shared
 
 PP = "/home/sichaohe/ph_work/ripserpp/ripserplusplus/build3/ripser++"
@@ -111,6 +112,32 @@ def run_timed(argv, stdout_path, timeout, env=None):
         raise
     fo.close()
     return out, err
+
+
+def run_probed(argv, stdout_path, timeout, env=None):
+    """(stdout, stderr, foreign_cpu, foreign_max) for a run.
+
+    How much of the box was used by somebody ELSE while the child ran. The
+    load average cannot answer that -- it counts our own threads, which is
+    what put it at 3.1 on this 16-core box -- so it is measured directly
+    from /proc. `foreign_cpu` is the MEAN number of foreign cores over the
+    run (the number the quiet-window gate uses); `foreign_max` is the
+    largest rate in any sampling window (a diagnostic). A run that hits the
+    timeout still carries its reading: the values are attached to the
+    exception on the way out.
+    """
+    probe = foreign_cpu.Probe()
+    try:
+        with probe:
+            out, err = run_timed(argv, stdout_path, timeout, env=env)
+    except subprocess.TimeoutExpired as e:
+        try:
+            e.foreign = probe.record()
+            e.foreign_max = probe.record_max()
+        except Exception:
+            pass
+        raise
+    return out, err, probe.record(), probe.record_max()
 
 
 def gpu_env():
@@ -221,14 +248,15 @@ def run_pp(key, kind, maxdim, args, timeout):
     src = os.path.join(EXAMPLES, args["file"])
     env, _dev = gpu_env()
     t0 = time.perf_counter()
-    out, err = run_timed(["/usr/bin/time", "-f", "__T__%e %M", PP] + args["pp_args"]
-                         + [src], "/tmp/_stdbench_pp.out", timeout, env=env)
+    out, err, foreign, foreign_max = run_probed(
+        ["/usr/bin/time", "-f", "__T__%e %M", PP] + args["pp_args"] + [src],
+        "/tmp/_stdbench_pp.out", timeout, env=env)
     wall = time.perf_counter() - t0
     m = re.search(r"__T__([\d.]+) (\d+)", err)
     rss = int(m.group(2)) if m else 0
     proc = float(m.group(1)) if m else 0.0
     bars = parse_ripserpp_barcodes("/tmp/_stdbench_pp.out")
-    return wall, proc, rss, bars
+    return wall, proc, rss, bars, foreign, foreign_max
 
 
 def run_ripser_cpu(key, kind, maxdim, args, timeout):
@@ -238,15 +266,15 @@ def run_ripser_cpu(key, kind, maxdim, args, timeout):
     # matrix, and a point cloud only through its own converter. The one
     # point-cloud dataset is therefore not runnable with it.
     t0 = time.perf_counter()
-    out, err = run_timed(["/usr/bin/time", "-f", "__T__%e %M", RIPserCPU]
-                         + args["ripser_cpu_args"] + [src],
-                         "/tmp/_stdbench_ripser.out", timeout)
+    out, err, foreign, foreign_max = run_probed(
+        ["/usr/bin/time", "-f", "__T__%e %M", RIPserCPU] + args["ripser_cpu_args"]
+        + [src], "/tmp/_stdbench_ripser.out", timeout)
     wall = time.perf_counter() - t0
     m = re.search(r"__T__([\d.]+) (\d+)", err)
     rss = int(m.group(2)) if m else 0
     proc = float(m.group(1)) if m else 0.0
     bars = parse_ripserpp_barcodes("/tmp/_stdbench_ripser.out")
-    return wall, proc, rss, bars
+    return wall, proc, rss, bars, foreign, foreign_max
 
 
 def run_ours(site, key, kind, maxdim, args, timeout, coeff):
@@ -289,10 +317,11 @@ print("BARS " + json.dumps(bars))
 '''
     env, _dev = gpu_env()
     t0 = time.perf_counter()
-    out, err = run_timed(["/usr/bin/time", "-f", "__T__%e %M", PY, "-c", child,
-                          site, src, kind, str(maxdim),
-                          "1.4" if key == "o3_4096" else "inf", str(coeff)],
-                         "/tmp/_stdbench_ours.out", timeout, env=env)
+    out, err, foreign, foreign_max = run_probed(
+        ["/usr/bin/time", "-f", "__T__%e %M", PY, "-c", child,
+         site, src, kind, str(maxdim),
+         "1.4" if key == "o3_4096" else "inf", str(coeff)],
+        "/tmp/_stdbench_ours.out", timeout, env=env)
     wall = time.perf_counter() - t0
     m = re.search(r"__T__([\d.]+) (\d+)", err)
     rss = int(m.group(2)) if m else 0
@@ -304,7 +333,8 @@ print("BARS " + json.dumps(bars))
         elif line.startswith("BARS "):
             bars = {int(k): [tuple(b) for b in v]
                     for k, v in json.loads(line[5:]).items()}
-    return reported if reported is not None else wall, proc, rss, bars
+    return (reported if reported is not None else wall, proc, rss, bars,
+            foreign, foreign_max)
 
 
 def compare(a, b):
@@ -390,48 +420,63 @@ def main() -> int:
             # --- ripser++ on the GPU -------------------------------------
             if "pp_gpu" in sides:
                 try:
-                    w, proc, rss, pb = run_pp(key, kind, maxdim, meta, args.timeout)
-                    per_rep.setdefault("pp_gpu", []).append((rep, w, proc, rss))
+                    w, proc, rss, pb, foreign, fmax = run_pp(
+                        key, kind, maxdim, meta, args.timeout)
+                    per_rep.setdefault("pp_gpu", []).append(
+                        (rep, w, proc, rss, foreign, fmax))
                     pp_bars = pb
                     print("%-14s rep%d pp_gpu      %8.3f s" % (key, rep, w), flush=True)
-                except subprocess.TimeoutExpired:
-                    per_rep.setdefault("pp_gpu", []).append((rep, None, None, None))
+                except subprocess.TimeoutExpired as e:
+                    per_rep.setdefault("pp_gpu", []).append(
+                        (rep, None, None, None, getattr(e, "foreign", ""),
+                         getattr(e, "foreign_max", "")))
                     print("%-14s pp TIMEOUT" % key, flush=True)
 
             # --- canns-lib on the GPU ------------------------------------
             if "gpu" in sides:
                 try:
-                    w, proc, rss, ob = run_ours(args.gpu_site, key, kind, maxdim,
-                                               meta, args.timeout, args.coeff)
-                    per_rep.setdefault("gpu", []).append((rep, w, proc, rss))
+                    w, proc, rss, ob, foreign, fmax = run_ours(
+                        args.gpu_site, key, kind, maxdim, meta, args.timeout,
+                        args.coeff)
+                    per_rep.setdefault("gpu", []).append(
+                        (rep, w, proc, rss, foreign, fmax))
                     ours_bars = ob
                     print("%-14s rep%d canns_gpu   %8.3f s" % (key, rep, w), flush=True)
-                except subprocess.TimeoutExpired:
-                    per_rep.setdefault("gpu", []).append((rep, None, None, None))
+                except subprocess.TimeoutExpired as e:
+                    per_rep.setdefault("gpu", []).append(
+                        (rep, None, None, None, getattr(e, "foreign", ""),
+                         getattr(e, "foreign_max", "")))
                     print("%-14s canns_gpu TIMEOUT" % key, flush=True)
 
             # --- the reference CPU implementation -------------------------
             if "ripser_cpu" in sides:
                 try:
-                    w, proc, rss, rb = run_ripser_cpu(key, kind, maxdim, meta,
-                                                      args.timeout)
-                    per_rep.setdefault("ripser_cpu", []).append((rep, w, proc, rss))
+                    w, proc, rss, rb, foreign, fmax = run_ripser_cpu(
+                        key, kind, maxdim, meta, args.timeout)
+                    per_rep.setdefault("ripser_cpu", []).append(
+                        (rep, w, proc, rss, foreign, fmax))
                     ripser_bars = rb
                     print("%-14s rep%d ripser_cpu  %8.3f s" % (key, rep, w), flush=True)
-                except subprocess.TimeoutExpired:
-                    per_rep.setdefault("ripser_cpu", []).append((rep, None, None, None))
+                except subprocess.TimeoutExpired as e:
+                    per_rep.setdefault("ripser_cpu", []).append(
+                        (rep, None, None, None, getattr(e, "foreign", ""),
+                         getattr(e, "foreign_max", "")))
                     print("%-14s ripser_cpu TIMEOUT" % key, flush=True)
 
             # --- canns-lib on the CPU ------------------------------------
             if "cpu" in sides:
                 try:
-                    w, proc, rss, cb = run_ours(args.cpu_site, key, kind, maxdim,
-                                               meta, args.timeout, args.coeff)
-                    per_rep.setdefault("cpu", []).append((rep, w, proc, rss))
+                    w, proc, rss, cb, foreign, fmax = run_ours(
+                        args.cpu_site, key, kind, maxdim, meta, args.timeout,
+                        args.coeff)
+                    per_rep.setdefault("cpu", []).append(
+                        (rep, w, proc, rss, foreign, fmax))
                     cpu_bars = cb
                     print("%-14s rep%d canns_cpu   %8.3f s" % (key, rep, w), flush=True)
-                except subprocess.TimeoutExpired:
-                    per_rep.setdefault("cpu", []).append((rep, None, None, None))
+                except subprocess.TimeoutExpired as e:
+                    per_rep.setdefault("cpu", []).append(
+                        (rep, None, None, None, getattr(e, "foreign", ""),
+                         getattr(e, "foreign_max", "")))
                     print("%-14s canns_cpu TIMEOUT" % key, flush=True)
 
         # --- the barcode comparison, once per side -------------------------
@@ -484,13 +529,15 @@ def main() -> int:
                     devs.append(ddev)
                 m_exp = "yes" if unmatched == 0 else "no"
             ok = (m_exp == "yes")
-            for (rep, w, proc, rss) in reps:
+            for (rep, w, proc, rss, foreign, fmax) in reps:
                 rows.append({
                     "dataset": key, "side": side, "rep": rep,
                     "maxdim": maxdim,
                     "wall_s": "%.3f" % w if w is not None else "",
                     "proc_s": "%.3f" % proc if proc is not None else "",
                     "rss_kb": rss if rss is not None else "",
+                    "foreign_cpu": foreign if foreign is not None else "",
+                    "foreign_max": fmax if fmax is not None else "",
                     "dims": "|".join(str(d) for d in dims),
                     "bars_total": total,
                     "match_pp": m_pp, "match_expected": m_exp,
@@ -506,7 +553,8 @@ def main() -> int:
 
     fields = ["dataset", "side", "rep", "maxdim", "wall_s", "proc_s", "rss_kb",
               "dims", "bars_total", "match_pp", "match_expected", "max_rel_dev",
-              "verdict", "loadavg", "gpu", "threads", "commit", "build_md5"]
+              "verdict", "loadavg", "foreign_cpu", "foreign_max", "gpu",
+              "threads", "commit", "build_md5"]
     with open(args.out, "w", newline="") as fh:
         w = csv.DictWriter(fh, fieldnames=fields)
         w.writeheader()

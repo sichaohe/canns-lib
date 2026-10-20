@@ -54,14 +54,14 @@ REFERENCE_FINDINGS = ("TIMEOUT", "GPU_OOM")
 PROVENANCE_COLUMNS = ("threads", "commit", "build_md5")
 
 
-def check(path, sizes=None, max_loadavg=0.0):
+def check(path, sizes=None, max_loadavg=0.0, max_foreign_cpu=0.25):
     fails = []
     with open(path, newline="") as fh:
         rows = list(csv.DictReader(fh))
     if not rows:
         return ["table is empty: %s" % path]
     for col in ("n", "side", "threshold", "wall_s", "rss_kb", "bars",
-                "error", "note", "loadavg"):
+                "error", "note", "loadavg", "foreign_cpu", "foreign_max"):
         if col not in rows[0]:
             return ["table is missing column %s" % col]
 
@@ -137,6 +137,10 @@ def check(path, sizes=None, max_loadavg=0.0):
                              % (n, side))
             if not (r.get("loadavg") or "").strip():
                 fails.append("n=%d %s: no load average recorded" % (n, side))
+            if not (r.get("foreign_cpu") or "").strip():
+                fails.append("n=%d %s: no foreign-load reading recorded -- "
+                             "without it the table cannot say whether it was "
+                             "measured on a quiet host" % (n, side))
             # the build identity. On our side it is the source fingerprint
             # and the thread count; on the reference side it is the md5 of
             # the binary that produced the row -- the convention the
@@ -168,6 +172,47 @@ def check(path, sizes=None, max_loadavg=0.0):
     # code: on this shared machine a neighbour's job changes the numbers by
     # up to 40% and can flip a comparison's sign. So a table can be asked
     # to prove it was measured in a quiet window.
+    #
+    # THE GATE IS THE FOREIGN LOAD, NOT THE LOAD AVERAGE. The load average
+    # counts our own measurement -- the reduction runs on the host with one
+    # thread per core, and our own runs put it at 3.1 on this 16-core box
+    # -- so a threshold on it has to clear our own footprint, and a
+    # neighbour's two-core job then hides underneath. The `foreign_cpu`
+    # column is the number of cores used by processes that are NOT ours,
+    # measured while the row was being produced: ours is excluded by
+    # construction, so a small value is evidence and not an artefact of how
+    # busy we are. The load average is kept as a diagnostic, and as an
+    # optional coarse gate for a host that has gone badly wrong.
+    if max_foreign_cpu > 0:
+        worst_mean, worst_max = 0.0, 0.0
+        bad = None
+        for r in rows:
+            raw = (r.get("foreign_cpu") or "").strip()
+            if not raw:
+                bad = "a row has no foreign-load reading"
+                break
+            try:
+                fc = float(raw)
+            except ValueError:
+                bad = "the foreign-load column is not a number"
+                break
+            try:
+                fm = float((r.get("foreign_max") or "").strip() or 0.0)
+            except ValueError:
+                fm = 0.0
+            worst_mean = max(worst_mean, fc)
+            worst_max = max(worst_max, fm)
+            if fc > max_foreign_cpu and bad is None:
+                bad = ("the foreign load %s cores on this row is above the "
+                       "quiet-window threshold %.2f -- somebody else was "
+                       "using the host while this row was measured"
+                       % (raw, max_foreign_cpu))
+        print("worst foreign load: mean %.3f cores, largest single window "
+              "%.3f cores (threshold %.2f)"
+              % (worst_mean, worst_max, max_foreign_cpu))
+        if bad:
+            fails.append(bad)
+
     if max_loadavg > 0:
         for r in rows:
             try:
@@ -215,6 +260,11 @@ def mutate(src, dst, kind):
         first(lambda r: r["side"] in OURS)["wall_s"] = "0"
     elif kind == "no_loadavg":
         first(lambda r: r["side"] in OURS)["loadavg"] = ""
+    elif kind == "foreign_busy":
+        # somebody else was using the host while this row was measured
+        first(lambda r: r["side"] in OURS)["foreign_cpu"] = "3.500"
+    elif kind == "no_foreign":
+        first(lambda r: r["side"] in OURS)["foreign_cpu"] = ""
     elif kind == "crash_row":
         r = first(lambda x: x["side"] in OURS)
         r["error"] = "CRASH"
@@ -234,7 +284,8 @@ def mutate(src, dst, kind):
 
 
 MUTATIONS = ["drop_side", "differing_forms", "bars_disagree", "no_gpu_free",
-             "zero_time", "no_loadavg", "crash_row", "no_provenance",
+             "zero_time", "no_loadavg", "foreign_busy", "no_foreign",
+             "crash_row", "no_provenance",
              "lib_wall_over_wall"]
 
 
@@ -244,12 +295,20 @@ def main() -> int:
     ap.add_argument("--sizes", default="")
     ap.add_argument("--max-loadavg", type=float, default=0.0,
                     help="fail if any row was measured at or above this load "
-                         "average; 0 = do not check")
+                         "average; 0 = do not check. The load average counts "
+                         "OUR OWN threads, so it is a coarse diagnostic, not "
+                         "the quiet-window gate -- that is --max-foreign-cpu.")
+    ap.add_argument("--max-foreign-cpu", type=float, default=0.25,
+                    help="fail if any row was measured while somebody else "
+                         "was using more than this many cores; 0 = do not "
+                         "check. Ours is excluded from the reading by "
+                         "construction, so this is the contamination gate.")
     ap.add_argument("--self-test", action="store_true")
     args = ap.parse_args()
     sizes = [int(x) for x in args.sizes.split(",") if x.strip()] or None
 
-    fails = check(args.csv, sizes, max_loadavg=args.max_loadavg)
+    fails = check(args.csv, sizes, max_loadavg=args.max_loadavg,
+                   max_foreign_cpu=args.max_foreign_cpu)
     if fails:
         print("\nFAIL (%d problems):" % len(fails))
         for f in fails[:40]:
@@ -266,7 +325,8 @@ def main() -> int:
             for kind in MUTATIONS:
                 dst = os.path.join(tmp, "mut_%s.csv" % kind)
                 mutate(args.csv, dst, kind)
-                f = check(dst, sizes, max_loadavg=args.max_loadavg)
+                f = check(dst, sizes, max_loadavg=args.max_loadavg,
+                          max_foreign_cpu=args.max_foreign_cpu)
                 if f:
                     print("  self-test %-18s -> correctly FAILED (%d problem(s))"
                           % (kind, len(f)))

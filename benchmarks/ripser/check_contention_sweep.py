@@ -23,7 +23,8 @@ import statistics
 import sys
 import tempfile
 
-REQUIRED = ["pass", "level", "side", "rep", "wall_s", "bars", "loadavg", "gpu",
+REQUIRED = ["pass", "level", "side", "rep", "wall_s", "bars", "loadavg",
+            "foreign_cpu", "foreign_max", "gpu",
             "verdict"]
 SIDES = ("ours", "ripserpp")
 
@@ -90,6 +91,20 @@ def check(path):
         if not (r.get("loadavg") or "").strip():
             fails.append("level %s / %s / rep %s: no load average recorded"
                          % (r["level"], r["side"], r["rep"]))
+        if not (r.get("foreign_cpu") or "").strip():
+            fails.append("level %s / %s / rep %s: no foreign-load reading -- "
+                         "the competitors this experiment starts are ours, so "
+                         "this is the interference we did NOT ask for"
+                         % (r["level"], r["side"], r["rep"]))
+        else:
+            try:
+                fc = float(r["foreign_cpu"])
+            except ValueError:
+                fc = None
+            if fc is not None and fc > 0.25:
+                fails.append("level %s / %s / rep %s: the foreign load %s cores "
+                             "is above the quiet-window threshold 0.25"
+                             % (r["level"], r["side"], r["rep"], r["foreign_cpu"]))
         try:
             if float(r["wall_s"]) <= 0:
                 fails.append("level %s / %s / rep %s: non-positive wall time"
@@ -139,6 +154,10 @@ def mutate(src, dst, kind):
         first(lambda r: True)["wall_s"] = "0"
     elif kind == "no_loadavg":
         first(lambda r: True)["loadavg"] = ""
+    elif kind == "foreign_busy":
+        first(lambda r: True)["foreign_cpu"] = "1.750"
+    elif kind == "no_foreign":
+        first(lambda r: True)["foreign_cpu"] = ""
     elif kind == "dup_row":
         rows = rows + [dict(rows[0])]
     else:
@@ -151,7 +170,7 @@ def mutate(src, dst, kind):
 
 
 MUTATIONS = ["drop_baseline", "drop_level", "bad_verdict", "zero_time",
-             "no_loadavg", "dup_row"]
+             "no_loadavg", "foreign_busy", "no_foreign", "dup_row"]
 
 
 def main() -> int:

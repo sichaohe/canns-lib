@@ -40,6 +40,8 @@ import subprocess
 import sys
 import time
 
+import foreign_cpu
+
 PY = "/home/sichaohe/miniconda3/envs/rl/bin/python"
 PP = "/home/sichaohe/ph_work/ripserpp/ripserplusplus/build3/ripser++"
 ASA_NPY = "/home/sichaohe/ph_work/ph_dm_1200.npy"
@@ -50,7 +52,8 @@ REF_MD5 = ("ee1f5283091dd645a3dd53e6f1a7eac6:"
 REF_BARS = "1195|481|58"
 
 FIELDS = ["pass", "level", "side", "rep", "wall_s", "proc_s", "rss_kb", "bars",
-          "md5", "loadavg", "gpu", "verdict"]
+          "md5", "loadavg", "foreign_cpu", "foreign_max", "gpu",
+          "verdict"]
 
 CHILD = r'''
 import hashlib, sys, time
@@ -206,12 +209,28 @@ def main() -> int:
         time.sleep(args.settle)
         for rep in range(1, args.reps + 1):
             for side in ("ours", "ripserpp"):
-                if side == "ours":
-                    r = run_ours(args.site, ASA_NPY, args.maxdim, args.coeff,
-                                 args.timeout, env)
-                else:
-                    r = run_reference(txt_path, args.maxdim, args.timeout,
-                                      env, thresh="%.10g" % T)
+                # The competitors this experiment starts are OURS, so the
+                # foreign-load probe does not see them -- it sees the
+                # interference we did not ask for, which is the thing that
+                # would invalidate the degradation curve.
+                probe = foreign_cpu.Probe()
+                try:
+                    with probe:
+                        if side == "ours":
+                            r = run_ours(args.site, ASA_NPY, args.maxdim,
+                                         args.coeff, args.timeout, env)
+                        else:
+                            r = run_reference(txt_path, args.maxdim, args.timeout,
+                                              env, thresh="%.10g" % T)
+                except subprocess.TimeoutExpired as e:
+                    try:
+                        e.foreign = probe.record()
+                        e.foreign_max = probe.record_max()
+                    except Exception:
+                        pass
+                    raise
+                foreign = probe.record()
+                foreign_max = probe.record_max()
                 ok = (r.get("rc") == 0 and r.get("bars") == REF_BARS
                       and (side == "ripserpp" or r.get("md5") == REF_MD5))
                 rows.append({
@@ -220,6 +239,8 @@ def main() -> int:
                     "rss_kb": r.get("rss_kb", ""), "bars": r.get("bars", ""),
                     "md5": r.get("md5", ""),
                     "loadavg": open("/proc/loadavg").read().split()[0],
+                    "foreign_cpu": foreign,
+                    "foreign_max": foreign_max,
                     "gpu": dev,
                     "verdict": "OK" if ok else "BADCODE",
                 })

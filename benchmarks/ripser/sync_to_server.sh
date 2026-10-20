@@ -24,7 +24,9 @@ SRC=$(cd "$(dirname "$0")" && pwd)
 DST=${CANNS_BENCH_DIR:-/home/sichaohe/canns-lib-dev/benchmarks/ripser}
 
 FILES="scale_scan.py standard_bench.py unified_ablation.py t_arm_equivalence.py \
+contention_sweep.py foreign_cpu.py quiet_window_watch.sh cross_batch.py \
 check_scale_scan.py check_standard_bench.py check_unified_ablation.py \
+check_contention_sweep.py \
 check_gridcells_bench.py check_clean_h2h.py check_nsfix_ab.py \
 check_bounds_ab.py check_validate_gridcells.py check_characterize_gridcells.py"
 
@@ -45,7 +47,17 @@ for f in $FILES; do
     # the write and the move are one command, and the move is atomic: the
     # target is never observed half-written
     cat "$SRC/$f" | $SSH "cat > /tmp/_sync_one && mv /tmp/_sync_one $DST/$f"
-    read -r remote_md5 remote_size <<<"$($SSH "md5sum $DST/$f | cut -d' ' -f1; stat -c%s $DST/$f")"
+    # The md5 and the size come back as two LINES, and `read` stops at the
+    # first newline -- so the size was silently empty, the "landed empty"
+    # assertion below never fired, and the md5 comparison always failed.
+    # Join the lines with a space first, then read them.
+    remote_info=$($SSH "md5sum $DST/$f | cut -d' ' -f1; stat -c%s $DST/$f" | tr '\n' ' ')
+    read -r remote_md5 remote_size <<<"$remote_info"
+    if [ -z "$remote_size" ]; then
+        echo "  REFUSING: $f -- the size of the copy on the host could not be "
+        echo "            read, so its integrity cannot be asserted" >&2
+        exit 1
+    fi
     if [ "$remote_size" -eq 0 ]; then
         echo "  REFUSING: $f landed EMPTY on the host" >&2
         exit 1

@@ -6,52 +6,95 @@
 # time to the reference's flipped sign under load). So a measurement taken
 # now would not be a measurement of the code.
 #
-# The window condition: the load average below 1.5 for three consecutive
-# checks, a minute apart.
+# HOW THE BOX IS ASKED WHETHER IT IS QUIET. The load average cannot answer
+# that. It counts our own measurement -- the reduction runs on the host with
+# one thread per core, and our own runs put the load average at 3.1 on this
+# 16-core host -- so a threshold on it has to clear our own footprint, and
+# then a neighbour's two-core job hides underneath it. That is not
+# hypothetical: a threshold of 3.0 discarded a batch whose worst reading was
+# 2.73, and a threshold of 1.5 (which the running copy of this script still
+# had in memory) discarded it again, for the same reason.
 #
-# A BATCH IS ALL OR NOTHING. Checking the load once a minute is not
-# enough: a neighbour's job can start in the middle of a measurement, and
-# half a table measured under load is worse than no table, because it
-# looks like a table. So after every measurement the load average on
-# EVERY row of the table it produced is checked, and a batch with a
-# contaminated row is moved aside (not deleted) and the window is waited
-# for again.
+# So the box is asked directly. Every process's CPU time is read from /proc,
+# the ones owned by another user are summed, and the answer is a number of
+# CORES used by somebody else. Ours is excluded by construction, so the
+# number needs no fudge factor for how busy we are. See foreign_cpu.py.
 #
-# The measurements, in order: the scale scan; the ablation variants and
-# the unified ablation table; the standard suite with five repetitions;
-# the reference CPU baseline with a 900 s limit.
+# A BATCH IS ALL OR NOTHING. Checking the box once a minute is not enough:
+# a neighbour's job can start in the middle of a measurement, and half a
+# table measured under load is worse than no table, because it looks like a
+# table. So after every measurement the foreign load on EVERY row of the
+# table it produced is checked, and a batch with a contaminated row is moved
+# aside (not deleted) and the window is waited for again.
+#
+# The measurements, in order: the scale scan; the ablation variants and the
+# unified ablation table; the standard suite with five repetitions; the
+# reference CPU baseline; the contention sweep.
 #
 # Everything is written to /tmp; nothing is deleted.
 
 LOG=/tmp/quiet_watch.log
-# The load average includes OUR OWN measurement: the reduction runs on the
-# host with one thread per core, and the load average during our own runs
-# was measured at up to 2.7 on this 16-core host. A neighbour's job on the
-# same box was 7-9 cores and put the load average at 9-19. So the
-# threshold has to sit ABOVE our own footprint and BELOW a neighbour's:
-# 3.0 does, and the earlier 1.5 flagged our own runs as contaminated.
-MAX_LOAD=3.0
+REPO=${CANNS_BENCH_REPO:-/home/sichaohe/canns-lib-dev}
+MODULE=$REPO/benchmarks/ripser
 
-cd ~/canns-lib-dev || exit 1
+# The gate. A row measured while somebody else was using more than this
+# many cores ON AVERAGE is not a measurement of our code. The number is
+# the MEAN foreign load over the row (the total CPU time other people
+# used, divided by the row's wall time), not the largest burst: a
+# neighbour's job of seven to nine cores shows up here as seven or nine,
+# and a desktop compositor that used one core for half a second out of a
+# two-minute measurement shows up as 0.004, which is what it is worth.
+MAX_FOREIGN=0.25
+# The same question, asked before the batch starts, to decide whether the
+# box is quiet enough to start at all.
+QUIET_FOREIGN=0.25
+
+cd "$REPO" || exit 1
 source ~/miniconda3/etc/profile.d/conda.sh
 conda activate rl
 
+foreign_now() {
+    # The number of cores used by processes that are not ours, right now.
+    python3 -c "
+import sys
+sys.path.insert(0, '$MODULE')
+import foreign_cpu
+print('%.3f' % foreign_cpu.foreign_cores(1.0))
+" 2>/dev/null || echo ""
+}
+
+load_now() {
+    cut -d" " -f1 /proc/loadavg
+}
+
 batch_is_clean() {
-    python3 - "$1" "$MAX_LOAD" <<'PY'
+    # The batch's own evidence: the foreign load recorded on every row
+    # while that row was being measured.
+    python3 - "$1" "$MAX_FOREIGN" <<'PY'
 import csv, sys
 path, limit = sys.argv[1], float(sys.argv[2])
-worst = 0.0
+worst, worst_la, missing = 0.0, 0.0, 0
 try:
     with open(path, newline="") as fh:
         for r in csv.DictReader(fh):
+            raw = (r.get("foreign_cpu") or "").strip()
+            if not raw:
+                missing += 1
+                continue
             try:
-                worst = max(worst, float(r.get("loadavg") or 0.0))
+                worst = max(worst, float(raw))
+                worst_la = max(worst_la, float(r.get("loadavg") or 0.0))
             except ValueError:
-                pass
+                missing += 1
 except OSError:
+    print("no table to check")
+    sys.exit(2)
+print("worst foreign load in the batch: mean %.3f cores (worst load average "
+      "%.2f, %d row(s) without a reading)" % (worst, worst_la, missing))
+if missing:
+    print("rows without a foreign-load reading: %d" % missing)
     sys.exit(1)
-print("worst loadavg in the batch: %.2f" % worst)
-sys.exit(0 if worst < limit else 1)
+sys.exit(0 if worst <= limit else 1)
 PY
 }
 
@@ -70,13 +113,14 @@ measure() {
 
 quiet=0
 for i in $(seq 1 1440); do
-    l=$(cut -d" " -f1 /proc/loadavg)
-    if awk -v l="$l" -v m="$MAX_LOAD" 'BEGIN{exit !(l<m)}'; then
+    la=$(load_now)
+    fc=$(foreign_now)
+    if [ -n "$fc" ] && awk -v f="$fc" -v m="$QUIET_FOREIGN" 'BEGIN{exit !(f<m)}'; then
         quiet=$((quiet + 1))
     else
         quiet=0
     fi
-    echo "$(date +%Y-%m-%dT%H:%M:%S) loadavg=$l quiet_streak=$quiet" >> "$LOG"
+    echo "$(date +%Y-%m-%dT%H:%M:%S) loadavg=$la foreign_cores=$fc quiet_streak=$quiet" >> "$LOG"
     if [ "$quiet" -ge 3 ]; then
         echo "$(date +%Y-%m-%dT%H:%M:%S) window is quiet -- starting" >> "$LOG"
         if measure /tmp/scale_clean.csv /tmp/scale_clean.log \
@@ -96,6 +140,10 @@ for i in $(seq 1 1440); do
                 python benchmarks/ripser/standard_bench.py --sides ripser_cpu \
                 --reps 2 --timeout 900 --out /tmp/standard_bench_ripser_cpu_clean.csv
             echo "$(date +%Y-%m-%dT%H:%M:%S) reference CPU baseline done" >> "$LOG"
+            measure /tmp/contention_sweep_clean.csv /tmp/contention_sweep_clean.log \
+                python benchmarks/ripser/contention_sweep.py --levels 0,4,8 --reps 2 \
+                --out /tmp/contention_sweep_clean.csv
+            echo "$(date +%Y-%m-%dT%H:%M:%S) contention sweep done" >> "$LOG"
         else
             echo "$(date +%Y-%m-%dT%H:%M:%S) the scale scan was contaminated -- waiting for another window" >> "$LOG"
         fi

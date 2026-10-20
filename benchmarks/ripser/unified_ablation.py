@@ -63,6 +63,10 @@ import subprocess
 import sys
 import time
 
+# How much of the box was used by somebody ELSE while each variant ran --
+# see foreign_cpu.py for why the load average cannot answer it.
+import foreign_cpu
+
 PY = "/home/sichaohe/miniconda3/envs/rl/bin/python"
 ASA_NPY = "/home/sichaohe/ph_work/ph_dm_1200.npy"
 T = 200.2874965          # max finite distance = the real threshold
@@ -92,7 +96,8 @@ VARIANTS = [
 
 FIELDS = ["rep", "variant", "feature", "arm", "mode", "thresh", "build",
           "wall_s", "rss_kb", "bars", "md5", "h1top", "gpu_err", "rc",
-          "verdict", "loadavg", "gpu", "commit"]
+          "verdict", "loadavg", "foreign_cpu", "foreign_max", "gpu",
+          "commit"]
 
 CHILD = r'''
 import hashlib, sys, time
@@ -203,7 +208,22 @@ def main() -> int:
                           file=sys.stderr)
                     return 2
                 t0 = time.time()
-                r = run(path, thresh, mode, args.timeout, env=env)
+                # How much of the box was used by somebody ELSE while this
+                # variant ran -- see foreign_cpu.py for why the load average
+                # cannot answer it.
+                probe = foreign_cpu.Probe()
+                try:
+                    with probe:
+                        r = run(path, thresh, mode, args.timeout, env=env)
+                except subprocess.TimeoutExpired as e:
+                    try:
+                        e.foreign = probe.record()
+                        e.foreign_max = probe.record_max()
+                    except Exception:
+                        pass
+                    raise
+                foreign = probe.record()
+                foreign_max = probe.record_max()
                 rec = {
                     "rep": rep, "variant": name, "feature": feature,
                     "arm": arm, "mode": mode, "thresh": thresh,
@@ -216,6 +236,8 @@ def main() -> int:
                     "gpu_err": r.get("gpu_err", ""),
                     "rc": r.get("rc", ""),
                     "loadavg": open("/proc/loadavg").read().split()[0],
+                    "foreign_cpu": foreign,
+                    "foreign_max": foreign_max,
                     "gpu": dev, "commit": commit,
                 }
                 if rec["gpu_err"]:

@@ -67,6 +67,8 @@ import time
 
 import numpy as np
 
+import foreign_cpu
+
 PY = "/home/sichaohe/miniconda3/envs/rl/bin/python"
 PP = "/home/sichaohe/ph_work/ripserpp/ripserplusplus/build3/ripser++"
 SRC = "/home/sichaohe/canns-lib-dev"
@@ -90,7 +92,8 @@ print("BARS " + json.dumps(bars))
 
 FIELDS = ["n", "side", "threshold", "wall_s", "lib_wall_s", "rss_kb", "bars",
           "bars_d0", "bars_d1", "bars_d2", "error", "note", "loadavg",
-          "gpu", "threads", "commit", "build_md5"]
+          "foreign_cpu", "foreign_max", "gpu", "threads", "commit",
+          "build_md5"]
 
 
 def gpu_env():
@@ -322,6 +325,8 @@ def main() -> int:
                 continue
             best, rss, bars, err, note = None, 0, None, "", ""
             lib_wall = None
+            foreign = ""
+            foreign_max = ""
             for rep in range(args.reps):
                 if side == "ours":
                     argv = ["/usr/bin/time", "-f", "__T__%e %M", PY, "-c",
@@ -334,10 +339,19 @@ def main() -> int:
                             "--threshold", thresh, "--ratio", "1.0", path]
                     out_path = "/tmp/_scale_pp.out"
                 t0 = time.perf_counter()
+                # How much of the box was used by somebody ELSE while this
+                # arm ran. The load average cannot answer that (it counts
+                # our own threads), so it is measured directly; the gate
+                # that decides whether this table is a measurement of the
+                # code or of the machine is applied to this column.
+                probe = foreign_cpu.Probe()
                 try:
-                    out_text, err_text, rc = run_timed(argv, out_path,
-                                                        args.timeout, env=env)
+                    with probe:
+                        out_text, err_text, rc = run_timed(argv, out_path,
+                                                            args.timeout, env=env)
                 except subprocess.TimeoutExpired:
+                    foreign = probe.record()
+                    foreign_max = probe.record_max()
                     err = "TIMEOUT"
                     note = "did not finish inside %d s" % args.timeout
                     # the reference's own words survive the kill, on disk
@@ -348,6 +362,8 @@ def main() -> int:
                     except OSError:
                         pass
                     break
+                foreign = probe.record()
+                foreign_max = probe.record_max()
                 wall = time.perf_counter() - t0
                 if rc != 0:
                     # A crash is not a measurement. Record it as a failure,
@@ -401,6 +417,8 @@ def main() -> int:
                          "bars_d2": per.get(2, per.get("2", "")),
                          "error": err, "note": note,
                          "loadavg": open("/proc/loadavg").read().split()[0],
+                         "foreign_cpu": foreign,
+                         "foreign_max": foreign_max,
                          "gpu": dev,
                          "threads": threads if side == "ours" else "",
                          "commit": commit if side == "ours" else "",

@@ -44,7 +44,7 @@ ARMS = [("canns-gpu", "inf_preserved"), ("canns-gpu", "capped"),
 
 REQUIRED = ["matrix", "target", "input_form", "wall_s", "peak_rss_kb",
             "bars_d0", "bars_d1", "h1_top3", "h1_md5", "ref_h1_top3",
-            "loadavg"]
+            "loadavg", "foreign_cpu", "foreign_max"]
 
 
 def same_top3(a, b, rtol=1e-6):
@@ -72,7 +72,7 @@ def expected_matrices(matrix_dir=MATRIX_DIR):
     return sorted(f[:-4] for f in os.listdir(matrix_dir) if f.endswith(".npy"))
 
 
-def check(path, matrix_dir=MATRIX_DIR):
+def check(path, matrix_dir=MATRIX_DIR, max_foreign_cpu=0.25):
     """Returns a list of failure strings (empty == PASS)."""
     fails = []
     with open(path, newline="") as fh:
@@ -115,6 +115,47 @@ def check(path, matrix_dir=MATRIX_DIR):
             if not (r.get("loadavg") or "").strip():
                 fails.append("%s/%s/%s: no load average recorded (the machine is "
                              "shared)" % (m, target, form))
+            if not (r.get("foreign_cpu") or "").strip():
+                fails.append("%s/%s/%s: no foreign-load reading -- without it "
+                             "the table cannot say whether it was measured on "
+                             "a quiet host" % (m, target, form))
+
+    # The quiet-window gate is the FOREIGN load: the number of cores used by
+    # processes that are not ours while the cell was measured. The load
+    # average cannot serve as the gate -- it counts our own threads, and the
+    # ratio this table reports moves with it (measured: 0.617 at a load
+    # average below 1, 0.674 at 3-4) -- but it cannot say whether the load was
+    # ours or a neighbour's either. The foreign reading can.
+    if max_foreign_cpu > 0:
+        worst_mean, worst_max = 0.0, 0.0
+        bad = None
+        for r in rows:
+            raw = (r.get("foreign_cpu") or "").strip()
+            if not raw:
+                bad = "a row has no foreign-load reading"
+                break
+            try:
+                fc = float(raw)
+            except ValueError:
+                bad = "the foreign-load column is not a number"
+                break
+            try:
+                fm = float((r.get("foreign_max") or "").strip() or 0.0)
+            except ValueError:
+                fm = 0.0
+            worst_mean = max(worst_mean, fc)
+            worst_max = max(worst_max, fm)
+            if fc > max_foreign_cpu and bad is None:
+                bad = ("%s/%s/%s: the foreign load %s cores is above the "
+                       "quiet-window threshold %.2f -- somebody else was "
+                       "using the host while this cell was measured"
+                       % (r["matrix"], r["target"], r["input_form"], raw,
+                          max_foreign_cpu))
+        print("worst foreign load: mean %.3f cores, largest single window "
+              "%.3f cores (threshold %.2f)"
+              % (worst_mean, worst_max, max_foreign_cpu))
+        if bad:
+            fails.append(bad)
 
     # the arms of a matrix must agree on the barcode
     by_matrix = {}
@@ -167,6 +208,11 @@ def mutate(src, dst, kind):
         rows[0]["wall_s"] = "0"
     elif kind == "no_loadavg":
         rows[0]["loadavg"] = ""
+    elif kind == "foreign_busy":
+        # somebody else was using the host while this cell was measured
+        rows[0]["foreign_cpu"] = "2.500"
+    elif kind == "no_foreign":
+        rows[0]["foreign_cpu"] = ""
     elif kind == "bars_disagree":
         for r in rows:
             if r["target"] == "ripserpp":
@@ -182,17 +228,23 @@ def mutate(src, dst, kind):
 
 
 MUTATIONS = ["drop_cell", "dup_cell", "disagree_arms", "break_reference",
-             "zero_time", "no_loadavg", "bars_disagree"]
+             "zero_time", "no_loadavg", "foreign_busy", "no_foreign",
+             "bars_disagree"]
 
 
 def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("csv", nargs="?", default="gca_results_final.csv")
     ap.add_argument("--matrix-dir", default=MATRIX_DIR)
+    ap.add_argument("--max-foreign-cpu", type=float, default=0.25,
+                    help="fail if any cell was measured while somebody else "
+                         "was using more than this many cores; 0 = do not "
+                         "check. The load average counts OUR OWN threads, so "
+                         "it is a diagnostic, not the gate.")
     ap.add_argument("--self-test", action="store_true")
     args = ap.parse_args()
 
-    fails = check(args.csv, args.matrix_dir)
+    fails = check(args.csv, args.matrix_dir, max_foreign_cpu=args.max_foreign_cpu)
     if fails:
         print("\nFAIL (%d problems):" % len(fails))
         for f in fails[:40]:
@@ -210,7 +262,7 @@ def main() -> int:
             for kind in MUTATIONS:
                 dst = os.path.join(tmp, "mut_%s.csv" % kind)
                 mutate(args.csv, dst, kind)
-                f = check(dst, args.matrix_dir)
+                f = check(dst, args.matrix_dir, max_foreign_cpu=args.max_foreign_cpu)
                 if f:
                     print("  self-test %-18s -> correctly FAILED (%d problem(s))"
                           % (kind, len(f)))
