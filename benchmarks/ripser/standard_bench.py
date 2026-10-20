@@ -283,19 +283,23 @@ def main() -> int:
                 "ripser_cpu_args": [a for a in pp_args if a != "--sparse"]}
         expected = parse_ripserpp_barcodes(os.path.join(EXPECTED, exp_file))
 
-        # --- the three sides, interleaved, minimum over reps --------------
-        best = {}
+        # --- the sides, interleaved, every repetition recorded -----------
+        # Every repetition is a row of the table. The minimum over
+        # repetitions is the best case, and a paper cannot report a best
+        # case as the representative value; the median (and the spread
+        # around it) is computed by the checker, from these rows.
+        per_rep = {}
         pp_bars = ours_bars = cpu_bars = ripser_bars = None
         for rep in range(1, args.reps + 1):
             # --- ripser++ on the GPU -------------------------------------
             if "pp_gpu" in sides:
                 try:
                     w, proc, rss, pb = run_pp(key, kind, maxdim, meta, args.timeout)
-                    if "pp_gpu" not in best or w < best["pp_gpu"][0]:
-                        best["pp_gpu"] = (w, proc, rss)
+                    per_rep.setdefault("pp_gpu", []).append((rep, w, proc, rss))
                     pp_bars = pb
                     print("%-14s rep%d pp_gpu      %8.3f s" % (key, rep, w), flush=True)
                 except subprocess.TimeoutExpired:
+                    per_rep.setdefault("pp_gpu", []).append((rep, None, None, None))
                     print("%-14s pp TIMEOUT" % key, flush=True)
 
             # --- canns-lib on the GPU ------------------------------------
@@ -303,11 +307,11 @@ def main() -> int:
                 try:
                     w, proc, rss, ob = run_ours(args.gpu_site, key, kind, maxdim,
                                                meta, args.timeout, args.coeff)
-                    if "gpu" not in best or w < best["gpu"][0]:
-                        best["gpu"] = (w, proc, rss)
+                    per_rep.setdefault("gpu", []).append((rep, w, proc, rss))
                     ours_bars = ob
                     print("%-14s rep%d canns_gpu   %8.3f s" % (key, rep, w), flush=True)
                 except subprocess.TimeoutExpired:
+                    per_rep.setdefault("gpu", []).append((rep, None, None, None))
                     print("%-14s canns_gpu TIMEOUT" % key, flush=True)
 
             # --- the reference CPU implementation -------------------------
@@ -315,11 +319,11 @@ def main() -> int:
                 try:
                     w, proc, rss, rb = run_ripser_cpu(key, kind, maxdim, meta,
                                                       args.timeout)
-                    if "ripser_cpu" not in best or w < best["ripser_cpu"][0]:
-                        best["ripser_cpu"] = (w, proc, rss)
+                    per_rep.setdefault("ripser_cpu", []).append((rep, w, proc, rss))
                     ripser_bars = rb
                     print("%-14s rep%d ripser_cpu  %8.3f s" % (key, rep, w), flush=True)
                 except subprocess.TimeoutExpired:
+                    per_rep.setdefault("ripser_cpu", []).append((rep, None, None, None))
                     print("%-14s ripser_cpu TIMEOUT" % key, flush=True)
 
             # --- canns-lib on the CPU ------------------------------------
@@ -327,22 +331,22 @@ def main() -> int:
                 try:
                     w, proc, rss, cb = run_ours(args.cpu_site, key, kind, maxdim,
                                                meta, args.timeout, args.coeff)
-                    if "cpu" not in best or w < best["cpu"][0]:
-                        best["cpu"] = (w, proc, rss)
+                    per_rep.setdefault("cpu", []).append((rep, w, proc, rss))
                     cpu_bars = cb
                     print("%-14s rep%d canns_cpu   %8.3f s" % (key, rep, w), flush=True)
                 except subprocess.TimeoutExpired:
+                    per_rep.setdefault("cpu", []).append((rep, None, None, None))
                     print("%-14s canns_cpu TIMEOUT" % key, flush=True)
 
-        # --- the three-way barcode comparison -----------------------------
-        timed_out = {side for side in ("pp_gpu", "gpu", "cpu", "ripser_cpu")
-                     if side not in best}
+        # --- the barcode comparison, once per side -------------------------
         for side, bars in (("pp_gpu", pp_bars), ("gpu", ours_bars),
-                            ("cpu", cpu_bars), ("ripser_cpu", ripser_bars)):
+                           ("cpu", cpu_bars), ("ripser_cpu", ripser_bars)):
             if sides and side not in sides:
                 continue
-            if bars is None:
-                rows.append({"dataset": key, "side": side, "maxdim": maxdim,
+            reps = per_rep.get(side, [])
+            if bars is None or not reps:
+                rows.append({"dataset": key, "side": side, "rep": "",
+                             "maxdim": maxdim,
                              "wall_s": "", "proc_s": "", "rss_kb": "",
                              "dims": "", "bars_total": "",
                              "match_pp": "", "match_expected": "",
@@ -350,8 +354,7 @@ def main() -> int:
                              # A side that did not finish inside the timeout is
                              # a RESULT (it says the implementation cannot do
                              # this instance), not a missing row.
-                             "verdict": "TIMEOUT" if side in timed_out
-                                        else "MISSING"})
+                             "verdict": "TIMEOUT" if reps else "MISSING"})
                 continue
             dims = sorted(bars)
             total = sum(len(v) for v in bars.values())
@@ -380,32 +383,46 @@ def main() -> int:
                     devs.append(dev)
                 m_exp = "yes" if unmatched == 0 else "no"
             ok = (m_exp == "yes")
-            rows.append({
-                "dataset": key, "side": side, "maxdim": maxdim,
-                "wall_s": "%.3f" % best[side][0] if side in best else "",
-                "proc_s": "%.3f" % best[side][1] if side in best else "",
-                "rss_kb": best[side][2] if side in best else "",
-                "dims": "|".join(str(d) for d in dims),
-                "bars_total": total,
-                "match_pp": m_pp, "match_expected": m_exp,
-                "max_rel_dev": "%.3e" % max(devs or [0.0]),
-                "verdict": "SAME_BARCODE" if ok else "BARCODE_MISMATCH",
-            })
+            for (rep, w, proc, rss) in reps:
+                rows.append({
+                    "dataset": key, "side": side, "rep": rep,
+                    "maxdim": maxdim,
+                    "wall_s": "%.3f" % w if w is not None else "",
+                    "proc_s": "%.3f" % proc if proc is not None else "",
+                    "rss_kb": rss if rss is not None else "",
+                    "dims": "|".join(str(d) for d in dims),
+                    "bars_total": total,
+                    "match_pp": m_pp, "match_expected": m_exp,
+                    "max_rel_dev": "%.3e" % max(devs or [0.0]),
+                    "verdict": ("SAME_BARCODE" if ok else "BARCODE_MISMATCH")
+                               if w is not None else "TIMEOUT",
+                })
             print("   %-14s %-8s bars=%d match_expected=%s %s"
-                  % (key, side, total, m_exp, rows[-1]["verdict"]), flush=True)
+                  % (key, side, total, m_exp,
+                     "SAME_BARCODE" if ok else "BARCODE_MISMATCH"), flush=True)
 
-    fields = ["dataset", "side", "maxdim", "wall_s", "proc_s", "rss_kb", "dims",
-              "bars_total", "match_pp", "match_expected", "max_rel_dev", "verdict"]
+    fields = ["dataset", "side", "rep", "maxdim", "wall_s", "proc_s", "rss_kb",
+              "dims", "bars_total", "match_pp", "match_expected", "max_rel_dev",
+              "verdict"]
     with open(args.out, "w", newline="") as fh:
         w = csv.DictWriter(fh, fieldnames=fields)
         w.writeheader()
         for r in rows:
             w.writerow(r)
     print("\nwrote %s (%d rows)" % (args.out, len(rows)))
-    bad = [r for r in rows if r["verdict"] != "SAME_BARCODE"]
+    # A mismatch is counted per (dataset, side): the repetitions of one side
+    # are the same measurement, so a side that mismatched says so once.
+    bad = sorted({(r["dataset"], r["side"]) for r in rows
+                  if r["verdict"] == "BARCODE_MISMATCH"})
+    missing = sorted({(r["dataset"], r["side"]) for r in rows
+                      if r["verdict"] in ("MISSING", "TIMEOUT")})
     print("barcode mismatches vs the published reference: %d" % len(bad))
-    for r in bad:
-        print("   %s / %s" % (r["dataset"], r["side"]))
+    for ds, side in bad:
+        print("   %s / %s" % (ds, side))
+    if missing:
+        print("sides that did not finish (a result, not a defect): %d" % len(missing))
+        for ds, side in missing:
+            print("   %s / %s" % (ds, side))
     return 1 if bad else 0
 
 
