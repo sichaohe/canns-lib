@@ -35,14 +35,23 @@ export CARGO_TARGET_DIR=$HOME/canns-lib-dev/target
 build_variant() {
     name=$1
     extra=$2
+    out=/tmp/wh_abl_$name
     echo "=== building $name (features: parallel,hugepage,extension-module,gpu$extra) ==="
-    maturin build --release --out /tmp/wh_abl \
+    # the output directory is per variant: two wheels in one directory
+    # would both be unpacked into the same site, and the second would
+    # overwrite the first's extension -- the two variants would then be
+    # the same build
+    rm -rf "$out"
+    maturin build --release --out "$out" \
       --features parallel,hugepage,extension-module,gpu$extra 2>&1 | tail -2
     rm -rf ~/canns-lib-dev/site_abl_$name
     mkdir -p ~/canns-lib-dev/site_abl_$name
-    cd /tmp/wh_abl && for w in *.whl; do unzip -o -q "$w" -d ~/canns-lib-dev/site_abl_$name; done
+    cd "$out" && for w in *.whl; do unzip -o -q "$w" -d ~/canns-lib-dev/site_abl_$name; done
     cd ~/canns-lib-dev
-    echo "BUILT site_abl_$name"
+    # the extension's md5 is the identity of the variant: two variants with
+    # the same md5 are the same build, and the ablation would be empty
+    so=$(find ~/canns-lib-dev/site_abl_$name -name "*.so" | head -1)
+    echo "BUILT site_abl_$name  md5=$(md5sum "$so" | cut -c1-16)"
 }
 
 build_variant heapoff ",binary-heap"
