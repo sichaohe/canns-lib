@@ -342,6 +342,54 @@ macOS Darwin 26) and the timing/counter probes (`apparent-stats`,
 `gpu-phase-stats`, `walk-probe`) are documented in `Cargo.toml`, where each
 one says what it measures and what it costs.
 
+### The published wheels are CPU-only
+
+**The `gpu` feature is not in the release build.** `[tool.maturin]` sets
+`features = ["parallel", "hugepage", "extension-module"]`, so a wheel
+installed from PyPI contains no CUDA code at all: the apparent-pair pre-pass
+runs on the CPU, and the barcode is identical either way. The GPU pre-pass is
+an opt-in build, not a download.
+
+To get it, build the extension yourself:
+
+```bash
+# keep `extension-module` in the list: it is what makes PyO3 produce a
+# cdylib for Python instead of a binary linked against libpython
+maturin develop --release --features parallel,hugepage,extension-module,gpu
+```
+
+A CUDA toolkit is **not** required to build it. `build.rs` compiles
+`kernel/ripser_kernels.cu` with `nvcc` into a cubin and embeds it when a
+toolkit is on `PATH`; without one the build still succeeds and the driver
+JIT-compiles the same kernel file through NVRTC at run time. If there is no
+usable device, or the driver refuses the kernel, the run falls back to the CPU
+pre-pass — the library never *requires* a GPU to be correct, and the barcode
+does not change.
+
+To see which path a run actually took, set `CANNS_RIPSER_STATS=1` and read
+the `gpu_err` field of the `STATS` line on stderr: empty means the GPU
+pre-pass ran, and anything else is the reason it did not. A silent CPU
+fallback is otherwise indistinguishable from "the GPU was never tried".
+
+```bash
+CANNS_RIPSER_STATS=1 python -c "
+from canns_lib.ripser import ripser
+ripser(data, maxdim=2)
+" 2>&1 | grep -o 'gpu_err=\"[^\"]*\"'
+```
+
+The library uses **device 0**. `CUDA_VISIBLE_DEVICES` remaps which physical
+device that is, which is what you want on a host where another job holds the
+other device:
+
+```bash
+CUDA_VISIBLE_DEVICES=1 python -c "from canns_lib.ripser import ripser; ..."
+```
+
+The benchmark harness in `benchmarks/ripser/` has the same knob under the name
+`CANNS_BENCH_GPU` (it sets `CUDA_VISIBLE_DEVICES` for the child process), and
+it records the device in every row of every table it writes.
+
 ### Running Benchmarks
 
 ```bash
