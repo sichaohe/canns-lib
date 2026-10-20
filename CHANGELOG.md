@@ -21,6 +21,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 - **`gpu` cargo feature** — an opt-in GPU apparent-pair pre-pass, off by default so that the released wheel still builds without a CUDA toolkit. The kernels in `kernel/` are compiled by `nvcc` when it is available and fall back to NVRTC, or to the CPU, when it is not. Measured on an A100-SXM4-80GB with the same 2.9e8 columns as the ASA matrix: the CPU pre-pass takes 12.0-15.5 s against 0.093 s for the GPU kernel plus 0.095 s for the pinned readback.
+- **A reproducible head-to-head harness against ripser++** in `benchmarks/ripser/`: the runner, the load characterisation over 97 matrices, the standard suite on ripser++'s own datasets, the scale scan, the unified ablation, and a checker for each. Every table is produced by a script and every checker derives its own grid from the table rather than from a constant, so a missing cell is a failure and not a silent hole; each checker also carries negative self-tests that mutate a copy of the table and require the checker to notice. The tables are not committed: the grid-cell corpus behind two of them has an unsettled licence, so only the scripts and the aggregate characterisation are published until it is. `benchmarks/ripser/RESULTS-20261020.md` maps each table to its checker.
 
 ## [0.11.0] - 2026-09-23
 

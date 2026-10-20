@@ -324,12 +324,39 @@ maturin develop --release --features parallel
 python -m pytest tests/ -v
 ```
 
+### Optional build features
+
+All of these are off by default, so the released wheel and `pip install -e .`
+are unchanged unless you ask for them.
+
+| Feature | What it does | How to turn it on |
+|---|---|---|
+| `parallel` | Rayon-parallel reduction and assembly. **On by default.** | `--features parallel` |
+| `hugepage` | `MADV_HUGEPAGE` on allocations of 2 MB or more. Linux only, and it is what maturin enables for the release wheels: the pivot map at dim=2 is a single ~13 GB allocation whose insert cost is dominated by page faults and TLB misses rather than by hashing. Worth about 1.24x end to end on a real 1200x1200 ASA workload. | `--features hugepage` |
+| `gpu` | An opt-in GPU apparent-pair pre-pass. The kernels in `kernel/` are compiled by `nvcc` when a CUDA toolkit is present and fall back to NVRTC, or to the CPU, when it is not -- so the build never requires a toolkit. On an A100 the pre-pass over 2.9e8 columns takes 0.093 s on the GPU against 12.0-15.5 s on the CPU. | `--features gpu` |
+| `binary-heap` | Restores `std::collections::BinaryHeap` as the reduction's working column heap, instead of the hand-rolled `CoboundaryHeap` (a classic top-down sift-down with an early exit, which is what ripser++'s `std::priority_queue` does). The two are pinned to the same pop order by a unit test. | `--features binary-heap` |
+| `legacy-auto-sparse` | Restores the pre-2026-10-20 auto-sparse condition, in which the sparse distance matrix was used whenever the threshold was below the maximum finite distance, without requiring the matrix to actually contain a missing pair. **This one exists for the ablation table and is not a supported configuration**: the unit tests pin the fixed behaviour and fail with this feature on. | `--features legacy-auto-sparse` |
+
+`mimalloc` (opt-in, and off by default because mimalloc 0.1.43 segfaults on
+macOS Darwin 26) and the timing/counter probes (`apparent-stats`,
+`gpu-phase-stats`, `walk-probe`) are documented in `Cargo.toml`, where each
+one says what it measures and what it costs.
+
 ### Running Benchmarks
 
 ```bash
 cd benchmarks
 python compare_ripser.py --n-points 100 --maxdim 2 --trials 5
 ```
+
+`benchmarks/ripser/` also carries the head-to-head harness against
+`ripser++`, the standard-suite runner, the load characterisation and their
+checkers. Each table is produced by a script, and each has a checker that
+derives its own grid and refuses a table that does not match it; see
+`benchmarks/ripser/RESULTS-20261020.md` for the table-to-checker map. The
+tables themselves are not in the repository -- the grid-cell corpus they
+draw on has an unsettled licence, and only the scripts and the aggregate
+characterisation are published until it is.
 
 ## Technical Details
 
