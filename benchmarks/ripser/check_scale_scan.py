@@ -54,7 +54,7 @@ REFERENCE_FINDINGS = ("TIMEOUT", "GPU_OOM")
 PROVENANCE_COLUMNS = ("threads", "commit", "build_md5")
 
 
-def check(path, sizes=None):
+def check(path, sizes=None, max_loadavg=0.0):
     fails = []
     with open(path, newline="") as fh:
         rows = list(csv.DictReader(fh))
@@ -163,6 +163,25 @@ def check(path, sizes=None):
                                  "number" % (n, side))
             elif side in OURS:
                 fails.append("n=%d %s: no library wall clock" % (n, side))
+
+    # A table measured while the host was busy is not a measurement of the
+    # code: on this shared machine a neighbour's job changes the numbers by
+    # up to 40% and can flip a comparison's sign. So a table can be asked
+    # to prove it was measured in a quiet window.
+    if max_loadavg > 0:
+        for r in rows:
+            try:
+                la = float(r.get("loadavg") or 0.0)
+            except ValueError:
+                fails.append("the load average column is not a number")
+                break
+            if la >= max_loadavg:
+                fails.append("the load average %s on this row is not below "
+                             "the quiet-window threshold %.2f -- the batch "
+                             "was measured on a busy host"
+                             % (la, max_loadavg))
+                break
+
     return fails
 
 
@@ -223,11 +242,14 @@ def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("csv", nargs="?", default="scale_scan.csv")
     ap.add_argument("--sizes", default="")
+    ap.add_argument("--max-loadavg", type=float, default=0.0,
+                    help="fail if any row was measured at or above this load "
+                         "average; 0 = do not check")
     ap.add_argument("--self-test", action="store_true")
     args = ap.parse_args()
     sizes = [int(x) for x in args.sizes.split(",") if x.strip()] or None
 
-    fails = check(args.csv, sizes)
+    fails = check(args.csv, sizes, max_loadavg=args.max_loadavg)
     if fails:
         print("\nFAIL (%d problems):" % len(fails))
         for f in fails[:40]:
@@ -244,7 +266,7 @@ def main() -> int:
             for kind in MUTATIONS:
                 dst = os.path.join(tmp, "mut_%s.csv" % kind)
                 mutate(args.csv, dst, kind)
-                f = check(dst, sizes)
+                f = check(dst, sizes, max_loadavg=args.max_loadavg)
                 if f:
                     print("  self-test %-18s -> correctly FAILED (%d problem(s))"
                           % (kind, len(f)))
