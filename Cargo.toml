@@ -63,6 +63,13 @@ parallel = ["rayon"]
 # Measured on the ASA matrix (2026-10-20): -6.5% (inf input) / -6.9%
 # (capped input), three interleaved reps, byte-identical barcode.
 #
+# UNVERIFIED IN THE CURRENT DELIVERY: that measurement has no table behind
+# it -- the run it came from was not kept, so the number cannot be pointed
+# at a row. It is being re-measured by `benchmarks/ripser/unified_ablation.py`,
+# which turns this one switch off and nothing else, in one interleaved
+# pass, against the shipping build. Until that table exists, treat the
+# percentages above as a claim, not as a result.
+#
 # The two heaps are verified to produce the SAME pop order by the unit test
 # `coboundary_heap::pop_order_matches_binary_heap`.
 binary-heap = []
