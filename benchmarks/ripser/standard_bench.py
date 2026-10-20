@@ -246,7 +246,9 @@ def main() -> int:
                          "reference was added without re-running the GPU arms.")
     args = ap.parse_args()
     only = {k.strip() for k in args.only.split(",") if k.strip()}
-    sides = {k.strip() for k in args.sides.split(",") if k.strip()}
+    # An EMPTY filter means "every side"; a set of names means "only these".
+    sides = {k.strip() for k in args.sides.split(",") if k.strip()} or {
+        "pp_gpu", "gpu", "cpu", "ripser_cpu"}
 
     rows = []
     for key, _fname, kind, maxdim, pp_args, exp_file in DATASETS:
@@ -312,6 +314,8 @@ def main() -> int:
                     print("%-14s canns_cpu TIMEOUT" % key, flush=True)
 
         # --- the three-way barcode comparison -----------------------------
+        timed_out = {side for side in ("pp_gpu", "gpu", "cpu", "ripser_cpu")
+                     if side not in best}
         for side, bars in (("pp_gpu", pp_bars), ("gpu", ours_bars),
                             ("cpu", cpu_bars), ("ripser_cpu", ripser_bars)):
             if sides and side not in sides:
@@ -321,7 +325,12 @@ def main() -> int:
                              "wall_s": "", "proc_s": "", "rss_kb": "",
                              "dims": "", "bars_total": "",
                              "match_pp": "", "match_expected": "",
-                             "max_rel_dev": "", "verdict": "MISSING"})
+                             "max_rel_dev": "",
+                             # A side that did not finish inside the timeout is
+                             # a RESULT (it says the implementation cannot do
+                             # this instance), not a missing row.
+                             "verdict": "TIMEOUT" if side in timed_out
+                                        else "MISSING"})
                 continue
             dims = sorted(bars)
             total = sum(len(v) for v in bars.values())

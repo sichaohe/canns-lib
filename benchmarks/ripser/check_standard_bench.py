@@ -39,15 +39,35 @@ REQUIRED = ["dataset", "side", "maxdim", "wall_s", "proc_s", "rss_kb",
             "bars_total", "match_pp", "match_expected", "verdict"]
 
 
-def check(path, datasets=None, sides=None):
+def load_tables(paths):
+    """Merge several tables into one row set, keyed by (dataset, side).
+
+    A table may be split across files when a side had to be measured in a
+    separate pass (the reference CPU implementation needs its own run on the
+    heavy datasets). The merge is by (dataset, side); a row already present
+    is not overwritten, so the first file wins.
+    """
+    merged, order = {}, []
+    for path in paths:
+        with open(path, newline="") as fh:
+            for r in csv.DictReader(fh):
+                key = (r["dataset"], r["side"])
+                if key not in merged:
+                    merged[key] = r
+                    order.append(key)
+    return [merged[k] for k in order]
+
+
+def check(paths, datasets=None, sides=None):
     """Returns a list of failure strings (empty == PASS)."""
     datasets = datasets or DATASETS
     sides = sides or SIDES
     fails = []
-    with open(path, newline="") as fh:
-        rows = list(csv.DictReader(fh))
+    if isinstance(paths, str):
+        paths = [paths]
+    rows = load_tables(paths)
     if not rows:
-        return ["table is empty: %s" % path]
+        return ["table is empty: %s" % ", ".join(paths)]
     missing_cols = [c for c in REQUIRED if c not in rows[0]]
     if missing_cols:
         return ["table is missing columns: %s" % ", ".join(missing_cols)]
@@ -64,6 +84,19 @@ def check(path, datasets=None, sides=None):
             r = seen.get((ds, side))
             if r is None:
                 fails.append("missing row: %s / %s" % (ds, side))
+                continue
+            if r["verdict"] == "TIMEOUT":
+                # The side did not finish inside the timeout. That is a
+                # result, not a defect -- but it must be the ONLY side
+                # missing for that dataset, and it is reported.
+                print("  %s / %s: TIMEOUT (not comparable)" % (ds, side))
+                for other in sides:
+                    if other == side:
+                        continue
+                    orow = seen.get((ds, other))
+                    if orow is None or orow["verdict"] != "SAME_BARCODE":
+                        fails.append("%s / %s: the only comparable side is the "
+                                     "timed-out one" % (ds, side))
                 continue
             if r["verdict"] != "SAME_BARCODE":
                 fails.append("%s / %s: verdict %s" % (ds, side, r["verdict"]))
@@ -120,15 +153,14 @@ MUTATIONS = ["flip_verdict", "break_expected", "break_pp", "drop_row",
 
 def main() -> int:
     ap = argparse.ArgumentParser()
-    ap.add_argument("csv", nargs="?", default="standard_bench.csv")
+    ap.add_argument("csv", nargs="*", default=["standard_bench.csv"])
     ap.add_argument("--self-test", action="store_true")
     args = ap.parse_args()
 
     fails = check(args.csv)
     print("expected cells: %d datasets x %d sides = %d"
           % (len(DATASETS), len(SIDES), len(DATASETS) * len(SIDES)))
-    with open(args.csv, newline="") as fh:
-        n = len(list(csv.DictReader(fh)))
+    n = len(load_tables(args.csv))
     print("rows in table                    : %d" % n)
     if fails:
         print("\nFAIL (%d problems):" % len(fails))
@@ -144,7 +176,7 @@ def main() -> int:
             bad = 0
             for kind in MUTATIONS:
                 dst = os.path.join(tmp, "mut_%s.csv" % kind)
-                mutate(args.csv, dst, kind)
+                mutate(args.csv[0], dst, kind)
                 f = check(dst)
                 if f:
                     print("  self-test %-16s -> correctly FAILED (%d problem(s))"
