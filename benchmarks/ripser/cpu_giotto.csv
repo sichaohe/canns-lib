@@ -1,0 +1,4 @@
+dataset,maxdim,ours_threads,giotto_threads,ours_cpu_s,giotto_s,giotto_error,ripserpp_gpu_s,ours_bars,ripserpp_bars,loadavg
+sphere_3_192,2,16,n/a,0.77,0.00,ModuleNotFoundError: No module named 'giotto',0.92,246,246,0.25
+Vicsek300,2,16,n/a,0.47,0.00,ModuleNotFoundError: No module named 'giotto',0.62,370,370,0.25
+celegans,2,16,n/a,0.46,0.00,ModuleNotFoundError: No module named 'giotto',0.62,424,424,0.25

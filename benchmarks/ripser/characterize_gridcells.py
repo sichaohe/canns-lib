@@ -60,6 +60,52 @@ print("BARS " + "|".join(str(len(x)) for x in r))
 '''
 
 
+<<<<<<< HEAD
+=======
+def provenance(site):
+    """The source fingerprint and the md5 of the built extension.
+
+    The benchmark host's source tree is a COPY, not a git checkout, so the
+    commit is taken from git when there is one and otherwise the fingerprint
+    is the md5 of the files the build depends on. The extension is inside
+    the package directory, so the search is RECURSIVE -- looking only at the
+    top of the site directory finds nothing and records an EMPTY
+    provenance, which is worse than none.
+    """
+    src = "/home/sichaohe/canns-lib-dev"
+    commit = ""
+    try:
+        commit = subprocess.run(["git", "-C", src, "rev-parse", "--short", "HEAD"],
+                                capture_output=True, text=True, timeout=20).stdout.strip()
+    except Exception:
+        commit = ""
+    if not commit:
+        h = hashlib.md5()
+        for rel in ("src/ripser/core/reduction.rs", "src/ripser/matrix/sparse.rs",
+                    "src/ripser/core/algorithm.rs", "Cargo.toml"):
+            try:
+                h.update(open(os.path.join(src, rel), "rb").read())
+            except OSError:
+                pass
+        commit = "src:%s" % h.hexdigest()[:12]
+    md5 = ""
+    if os.path.isdir(site):
+        for root, _dirs, names in os.walk(site):
+            for name in sorted(names):
+                if name.endswith(".so"):
+                    try:
+                        md5 = hashlib.md5(
+                            open(os.path.join(root, name), "rb").read()
+                        ).hexdigest()[:16]
+                    except OSError:
+                        md5 = ""
+                    break
+            if md5:
+                break
+    return commit, md5
+
+
+>>>>>>> 4976b8e (test(bench): the characterisation's provenance, and the CPU baseline with its thread counts)
 def parse_stats(stderr):
     """The STATS / PHASESTATS lines into a dict."""
     out = {}

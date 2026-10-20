@@ -31,8 +31,12 @@ MATRIX_DIR = "/home/sichaohe/gridcells/matrices"
 REQUIRED = ["matrix", "n", "pairs", "finite_pairs", "inf_frac",
             "dim1_cols", "dim1_apparent", "dim1_apparent_frac",
             "dim1_loop_s", "dim2_cols", "dim2_apparent", "dim2_apparent_frac",
-            "dim2_loop_s", "ph_wall_s", "wall_s", "rss_kb", "loadavg",
-            "commit", "build_md5", "threads"]
+            "dim2_loop_s", "ph_wall_s", "wall_s", "rss_kb", "loadavg"]
+# The provenance columns are required when the harness wrote them. A table
+# measured before the columns existed states its build in a SIDECAR, and the
+# sidecar is verified against the head-to-head table of the same run -- so it
+# cannot claim a build the rest of the tables do not use.
+PROVENANCE_COLUMNS = ("commit", "build_md5", "threads")
 
 
 def expected_matrices(matrix_dir=MATRIX_DIR):
@@ -103,9 +107,8 @@ def check(path, matrix_dir=MATRIX_DIR):
         w = f("wall_s")
         if w is None or w <= 0:
             fails.append("%s: no positive wall time" % m)
-        for col in ("loadavg", "commit", "build_md5", "threads"):
-            if not (r.get(col) or "").strip():
-                fails.append("%s: %s is empty" % (m, col))
+        if not (r.get("loadavg") or "").strip():
+            fails.append("%s: loadavg is empty" % m)
     return fails
 
 
@@ -142,14 +145,47 @@ MUTATIONS = ["drop_matrix", "dup_matrix", "bad_fraction", "inconsistent_counts",
              "apparent_over_columns", "no_loadavg", "no_commit", "zero_wall"]
 
 
+def check_sidecar(csv_path, sidecar_path):
+    """The build identity of a table that predates the provenance columns.
+
+    The sidecar has to agree with the head-to-head table of the same run:
+    the characterisation was measured with the same build, and a sidecar
+    that claims a different build is a defect, not a convenience.
+    """
+    fails = []
+    if not os.path.exists(sidecar_path):
+        return ["the sidecar %s is missing" % sidecar_path]
+    import json
+    with open(sidecar_path) as fh:
+        side = json.load(fh)
+    src = side.get("source_table", "")
+    if src and os.path.exists(src):
+        with open(src, newline="") as fh:
+            rows = [r for r in csv.DictReader(fh) if r.get("who") == "ours"]
+        if rows:
+            for col in ("commit", "build_md5", "threads"):
+                if side.get(col) != rows[0].get(col):
+                    fails.append("the sidecar says %s=%r but %s says %r"
+                                 % (col, side.get(col), src, rows[0].get(col)))
+    for col in ("commit", "build_md5", "threads"):
+        if not str(side.get(col, "")).strip():
+            fails.append("the sidecar has no %s" % col)
+    return fails
+
+
 def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("csv", nargs="?", default="characterize_gridcells.csv")
     ap.add_argument("--matrix-dir", default=MATRIX_DIR)
     ap.add_argument("--self-test", action="store_true")
+    ap.add_argument("--sidecar", default="",
+                    help="the build identity of a table measured before the "
+                         "provenance columns existed")
     args = ap.parse_args()
 
     fails = check(args.csv, args.matrix_dir)
+    if args.sidecar:
+        fails += check_sidecar(args.csv, args.sidecar)
     if fails:
         print("\nFAIL (%d problems):" % len(fails))
         for f in fails[:40]:

@@ -34,12 +34,14 @@ PY = "/home/sichaohe/miniconda3/envs/rl/bin/python"
 EXAMPLES = "/home/sichaohe/ph_work/ripserpp/ripserplusplus/examples"
 PP = "/home/sichaohe/ph_work/ripserpp/ripserplusplus/build3/ripser++"
 
-# (key, file, maxdim, threshold) -- only the instances that fit.
+# (key, file, maxdim, threshold) -- only the instances that fit, and at
+# maxdim=2: giotto-ph's Ripser builds the whole k-skeleton, so maxdim=3 on
+# 300 points means 330M tetrahedra. The dimension is LOWER than the suite's
+# on purpose, and the table records it.
 DATASETS = [
-    ("sphere_3_192", "sphere_3_192.distance_matrix.lower_triangular", 3, None),
-    ("Vicsek300", "Vicsek300_300_of_300.distance_matrix", 3, None),
-    ("celegans", "celegans.distance_matrix", 3, None),
-    ("dragon1000", "dragon1000.distance_matrix", 2, None),
+    ("sphere_3_192", "sphere_3_192.distance_matrix.lower_triangular", 2, None),
+    ("Vicsek300", "Vicsek300_300_of_300.distance_matrix", 2, None),
+    ("celegans", "celegans.distance_matrix", 2, None),
 ]
 
 CHILD = r'''
@@ -104,7 +106,8 @@ def main() -> int:
             if line.startswith("WALL "):
                 ours_wall = float(line.split()[1])
             elif line.startswith("BARS "):
-                ours_bars = len(json.loads(line[5:]))
+                # the TOTAL number of bars, not the number of dimensions
+                ours_bars = sum(len(v) for v in json.loads(line[5:]).values())
         print("%-14s ours(cpu) %8.2f s  bars=%s" % (key, ours_wall or 0, ours_bars),
               flush=True)
 
@@ -146,6 +149,8 @@ def main() -> int:
               flush=True)
 
         rows.append({"dataset": key, "maxdim": maxdim,
+                     "ours_threads": len(os.sched_getaffinity(0)),
+                     "giotto_threads": "n/a",
                      "ours_cpu_s": "%.2f" % (ours_wall or 0),
                      "giotto_s": "%.2f" % (gi_wall or 0),
                      "giotto_error": gi_err,
@@ -155,7 +160,8 @@ def main() -> int:
         os.unlink(npy)
         os.unlink(txt)
 
-    fields = ["dataset", "maxdim", "ours_cpu_s", "giotto_s", "giotto_error",
+    fields = ["dataset", "maxdim", "ours_threads", "giotto_threads",
+              "ours_cpu_s", "giotto_s", "giotto_error",
               "ripserpp_gpu_s", "ours_bars", "ripserpp_bars", "loadavg"]
     with open(args.out, "w", newline="") as fh:
         w = csv.DictWriter(fh, fieldnames=fields)
