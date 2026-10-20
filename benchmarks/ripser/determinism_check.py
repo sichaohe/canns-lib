@@ -81,12 +81,7 @@ def main() -> int:
     d = make_instance(args.n)
     np.save(path, d)
     txt = "/tmp/_det_%d.txt" % args.n
-    # ripser++'s reader cannot express `+inf` -- a text file with `inf` in it
-    # is read back as a different matrix (it reported 648 bars instead of
-    # 10,946 when the file was written with the holes intact). The CAPPED
-    # matrix is the same filtration, so it is the right thing to hand it.
-    cap = float(d[np.isfinite(d)].max()) * 2 + 1.0
-    np.savetxt(txt, np.where(np.isfinite(d), d, cap), fmt="%.10g")
+    np.savetxt(txt, d, fmt="%.10g")
 
     rows = []
     for side in ("ours", "ripserpp"):

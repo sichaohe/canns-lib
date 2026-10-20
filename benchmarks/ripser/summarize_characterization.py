@@ -66,8 +66,7 @@ def main() -> int:
     print(stat("sharded pivot build seconds", col(rows, "dim2_pivot_build_s"), "%.3f"))
     print()
     print("-- the whole call --")
-    print(stat("library wall seconds", col(rows, "ph_wall_s"), "%.3f"))
-    print(stat("process wall seconds", col(rows, "proc_s"), "%.3f"))
+    print(stat("wall seconds", col(rows, "wall_s"), "%.3f"))
     print(stat("reduction phase seconds", col(rows, "ph_reduce_s"), "%.3f"))
     print(stat("assembly phase seconds", col(rows, "ph_assemble_s"), "%.3f"))
     print(stat("peak RSS (MB)", [x / 1024.0 for x in col(rows, "rss_kb")], "%.0f"))
@@ -76,10 +75,7 @@ def main() -> int:
     shares = {"dim1 loop": [], "dim2 loop": [], "GPU pre-pass": [],
               "pivot build": [], "assembly": [], "other": []}
     for r in rows:
-        # The LIBRARY wall: the process wall also carries the interpreter
-        # start and the .npy load, which are not the implementation's cost.
-        wall = (float(r["ph_wall_s"]) if (r.get("ph_wall_s") or "").strip()
-                else 0.0)
+        wall = float(r["wall_s"]) if (r.get("wall_s") or "").strip() else 0.0
         if wall <= 0:
             continue
         def g(k):
