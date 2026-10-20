@@ -92,7 +92,13 @@ def parse_kv(line: str) -> dict:
 def run_ours(timeout: int):
     env = dict(os.environ)
     env["CANNS_RIPSER_STATS"] = "1"
-    p = subprocess.run([PY, "-c", CHILD, SITE, repr(T)],
+    # `/usr/bin/time` so the table carries the PROCESS wall and the peak RSS
+    # for our side as well. Without it the head-to-head could only quote the
+    # library wall for us, and the two sides' overheads (interpreter start,
+    # import, numpy load on ours; CUDA init and the text load on ripser++'s)
+    # were invisible -- which is exactly how two tables of the same
+    # comparison ended up quoting different ratios.
+    p = subprocess.run(["/usr/bin/time", "-f", "__T__%e %M", PY, "-c", CHILD, SITE, repr(T)],
                        capture_output=True, text=True, env=env, timeout=timeout)
     rec = {"rc": p.returncode}
     for line in p.stdout.splitlines():
@@ -120,6 +126,10 @@ def run_ours(timeout: int):
     rec["ag"] = ag
     rec["gpu_err"] = gpu_err
     rec["stderr_tail"] = p.stderr[-2000:]
+    # `/usr/bin/time` writes its line to stderr; keep it separately so the
+    # 2000-character tail cut cannot drop it.
+    rec["time_line"] = "\n".join(ln for ln in p.stderr.splitlines()
+                                  if ln.startswith("__T__"))
     return rec
 
 
@@ -165,15 +175,19 @@ def main() -> int:
     for rep in range(1, args.reps + 1):
         for who in ("ours", "ripserpp"):
             r = run_ours(args.timeout) if who == "ours" else run_ripserpp(args.timeout)
-            rec = {"rep": rep, "who": who}
+            # The table has to say WHICH build it measured: a head-to-head
+            # without the build identity is not reproducible.
+            rec = {"rep": rep, "who": who,
+                   "build": SITE if who == "ours" else "ripser++ build3"}
             if who == "ours":
                 rec["wall_s"] = r.get("WALL", "")
                 rec["bars"] = r.get("BARS", "")
                 rec["md5"] = r.get("MD5", "")
                 rec["h1top"] = r.get("H1TOP", "")
                 ph, st, ag = r["ph"], r["st"], r["ag"]
-                rec["proc_s"] = ""
-                rec["rss_kb"] = ""
+                m = re.search(r"__T__([\d.]+) (\d+)", r.get("time_line", ""))
+                rec["proc_s"] = m.group(1) if m else ""
+                rec["rss_kb"] = m.group(2) if m else ""
                 rec["s_dim0"] = ph.get("dim0", "")
                 rec["s_edges"] = ph.get("edges", "")
                 rec["s_d1_reduce"] = st["d1"].get("loop_s", "")
@@ -212,7 +226,7 @@ def main() -> int:
                   % (rep, who, rec["wall_s"], rec.get("proc_s", ""),
                      rec["bars"], rec["verdict"]), flush=True)
 
-    fields = ["rep", "who", "wall_s", "proc_s", "rss_kb", "bars", "md5", "h1top",
+    fields = ["rep", "who", "build", "wall_s", "proc_s", "rss_kb", "bars", "md5", "h1top",
               "s_dim0", "s_edges", "s_d1_reduce", "s_d2_reduce", "s_d2_assemble",
               "s_d2_pivotbuild", "s_d2_gpupre", "s_d2_scan", "s_hashcopy",
               "s_total", "gpu_err", "verdict"]

@@ -80,18 +80,21 @@ print("BARS " + "|".join(str(len(x)) for x in r))
 print("MD5 " + md5)
 '''
 
-FIELDS = ["rep", "side", "arm", "filtration", "input_form", "thresh",
-          "wall_s", "bars", "md5", "verdict"]
+FIELDS = ["rep", "side", "build", "arm", "filtration", "input_form", "thresh",
+          "wall_s", "proc_s", "bars", "md5", "verdict"]
 
 
 def run_ours(mode, thresh, timeout=900):
-    p = subprocess.run([PY, "-c", CHILD, SITE, repr(thresh), mode],
+    p = subprocess.run(["/usr/bin/time", "-f", "__T__%e", PY, "-c", CHILD,
+                        SITE, repr(thresh), mode],
                        capture_output=True, text=True, timeout=timeout)
     out = {}
     for line in p.stdout.splitlines():
         if " " in line:
             k, _, v = line.partition(" ")
             out[k] = v
+    m = re.search(r"__T__([\d.]+)", p.stderr)
+    out["PROC"] = m.group(1) if m else ""
     out["rc"] = p.returncode
     return out
 
@@ -102,8 +105,18 @@ def run_pp(thresh, timeout=900):
          "--dim", "2", "--threshold", "%.10g" % thresh, "--ratio", "1.0", PP_TXT],
         capture_output=True, text=True, timeout=timeout)
     m = re.search(r"__T__([\d.]+)", p.stderr)
+    # `wall_s` is the LIBRARY wall on both sides: ripser++'s own "total
+    # time", which excludes its process start, its CUDA init and the load of
+    # the text file. The process wall is kept in `proc_s` so both
+    # conventions are in the table, and the head-to-head table quotes the
+    # same one. Quoting the process wall here while the head-to-head quoted
+    # the library wall made two tables of the same comparison disagree by
+    # 5%.
+    lib = re.search(r"total time: ([\d.]+)s", p.stderr)
     bars = sum(1 for ln in p.stdout.splitlines() if ln.startswith(" ["))
-    return {"wall_s": m.group(1) if m else "", "bars": str(bars), "rc": p.returncode}
+    return {"wall_s": lib.group(1) if lib else "",
+            "proc_s": m.group(1) if m else "",
+            "bars": str(bars), "rc": p.returncode}
 
 
 def main() -> int:
@@ -117,16 +130,20 @@ def main() -> int:
         for arm, mode, thresh, pp_arm in ARMS:
             r = run_ours(mode, thresh)
             verdict = "OK" if (r.get("MD5") == REF_MD5 and r.get("BARS") == REF_BARS) else "BADCODEC"
-            rows.append({"rep": rep, "side": "ours", "arm": arm, "filtration": pp_arm,
+            rows.append({"rep": rep, "side": "ours", "build": SITE,
+                         "arm": arm, "filtration": pp_arm,
                          "input_form": mode, "thresh": thresh,
-                         "wall_s": r.get("WALL", ""), "bars": r.get("BARS", ""),
+                         "wall_s": r.get("WALL", ""), "proc_s": r.get("PROC", ""),
+                         "bars": r.get("BARS", ""),
                          "md5": r.get("MD5", ""), "verdict": verdict})
             print("rep=%d ours %-8s %.3f %s" % (rep, arm, float(r.get("WALL", 0)), verdict), flush=True)
         for pp_arm, thresh in PP_ARMS:
             r = run_pp(thresh)
-            rows.append({"rep": rep, "side": "ripserpp", "arm": pp_arm, "filtration": pp_arm,
+            rows.append({"rep": rep, "side": "ripserpp", "build": "ripser++ build3",
+                         "arm": pp_arm, "filtration": pp_arm,
                          "input_form": "capped", "thresh": thresh,
-                         "wall_s": r.get("wall_s", ""), "bars": r.get("bars", ""),
+                         "wall_s": r.get("wall_s", ""), "proc_s": r.get("proc_s", ""),
+                         "bars": r.get("bars", ""),
                          "md5": "", "verdict": "OK" if r.get("bars") == "1734" else "BADCODEC"})
             print("rep=%d ripserpp %-4s %s %s" % (rep, pp_arm, r.get("wall_s"), r.get("bars")), flush=True)
 
