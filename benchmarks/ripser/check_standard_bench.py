@@ -47,15 +47,20 @@ def load_tables(paths):
     heavy datasets). The merge is by (dataset, side); a row already present
     is not overwritten, so the first file wins.
     """
-    merged, order = {}, []
+    merged, order, dupes = {}, [], []
     for path in paths:
         with open(path, newline="") as fh:
             for r in csv.DictReader(fh):
                 key = (r["dataset"], r["side"])
-                if key not in merged:
-                    merged[key] = r
-                    order.append(key)
-    return [merged[k] for k in order]
+                if key in merged:
+                    # A duplicate is a defect in the table, not a row to
+                    # merge away: the merge keeps the first and the
+                    # duplicate is reported.
+                    dupes.append(key)
+                    continue
+                merged[key] = r
+                order.append(key)
+    return [merged[k] for k in order], dupes
 
 
 def check(paths, datasets=None, sides=None):
@@ -65,7 +70,9 @@ def check(paths, datasets=None, sides=None):
     fails = []
     if isinstance(paths, str):
         paths = [paths]
-    rows = load_tables(paths)
+    rows, dupes = load_tables(paths)
+    for key in dupes:
+        fails.append("duplicated row: %s / %s" % key)
     if not rows:
         return ["table is empty: %s" % ", ".join(paths)]
     missing_cols = [c for c in REQUIRED if c not in rows[0]]
@@ -74,10 +81,7 @@ def check(paths, datasets=None, sides=None):
 
     seen = {}
     for r in rows:
-        key = (r["dataset"], r["side"])
-        if key in seen:
-            fails.append("duplicated row: %s / %s" % key)
-        seen[key] = r
+        seen[(r["dataset"], r["side"])] = r
 
     for ds in datasets:
         for side in sides:
@@ -158,9 +162,11 @@ def main() -> int:
     args = ap.parse_args()
 
     fails = check(args.csv)
-    print("expected cells: %d datasets x %d sides = %d"
+    print("required cells: %d datasets x %d compared sides = %d"
           % (len(DATASETS), len(SIDES), len(DATASETS) * len(SIDES)))
-    n = len(load_tables(args.csv))
+    print("(the reference CPU implementation is reported alongside them; it is a")
+    print(" baseline, not a side under test, so it is not part of the grid)")
+    n = len(load_tables(args.csv)[0])
     print("rows in table                    : %d" % n)
     if fails:
         print("\nFAIL (%d problems):" % len(fails))
