@@ -37,9 +37,15 @@ import tempfile
 
 # ---- EXPECTED: the grid. The denominator is computed from THIS, not from
 # ---- the row count of the file.
-EXPECTED_REPS = 3
+# The grid is derived from the TABLE, not fixed here: a head-to-head that
+# was measured with more repetitions is not "wrong", it is better
+# estimated. The minimum is enforced instead, because the headline number
+# needs more than two repetitions to say anything.
+MIN_REPS = 5
 EXPECTED_WHO = ("ours", "ripserpp")
-EXPECTED_CELLS = EXPECTED_REPS * len(EXPECTED_WHO)
+# The provenance of the measurement: which commit, which binary, how many
+# threads, and what else was running on the machine.
+PROVENANCE_COLUMNS = ("commit", "build_md5", "threads", "loadavg")
 
 REF_MD5 = ("ee1f5283091dd645a3dd53e6f1a7eac6:"
            "9f0aa8c3ff2716f2fbb9ecd523bb0210:"
@@ -88,14 +94,26 @@ def check(path, expect_ratio_max=None, verbose=True):
     rows = read_rows(path)
 
     # -- rule 1: structure -------------------------------------------------
-    if len(rows) != EXPECTED_CELLS:
-        errs.append("expected %d cells (EXPECTED: %d reps x %d implementations), "
-                    "found %d" % (EXPECTED_CELLS, EXPECTED_REPS, len(EXPECTED_WHO), len(rows)))
-    for rep in range(1, EXPECTED_REPS + 1):
+    reps = sorted({int(r.get("rep") or 0) for r in rows})
+    if len(reps) < MIN_REPS:
+        errs.append("the table has %d repetitions, the minimum is %d -- a "
+                    "headline ratio needs more than two samples to mean "
+                    "anything" % (len(reps), MIN_REPS))
+    for rep in reps:
         for who in EXPECTED_WHO:
             n = sum(1 for r in rows if r.get("rep") == str(rep) and r.get("who") == who)
             if n != 1:
                 errs.append("cell (rep=%d, who=%s) appears %d times, expected 1" % (rep, who, n))
+
+    # -- rule 1b: the provenance of the measurement -------------------------
+    for i, r in enumerate(rows):
+        for col in PROVENANCE_COLUMNS:
+            if not (r.get(col) or "").strip():
+                errs.append("row %d (rep=%s who=%s): %s is empty -- a benchmark "
+                            "row has to say which commit and which binary it "
+                            "measured, how many threads ran, and what else was "
+                            "on the machine"
+                            % (i + 2, r.get("rep"), r.get("who"), col))
 
     # -- rule 2: no incomplete cells --------------------------------------
     for i, r in enumerate(rows):
@@ -236,7 +254,7 @@ def main() -> int:
 
     print("CHECK %s" % args.csv_path)
     print("  expected cells: %d (%d reps x %d implementations)"
-          % (EXPECTED_CELLS, EXPECTED_REPS, len(EXPECTED_WHO)))
+          % (len(rows), len(reps), len(EXPECTED_WHO)))
     errs = check(args.csv_path, args.expect_ratio_max)
     if not args.no_self_test:
         errs += negative_self_test(args.csv_path)

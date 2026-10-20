@@ -33,6 +33,7 @@ from __future__ import annotations
 
 import argparse
 import csv
+import hashlib
 import os
 import re
 import subprocess
@@ -44,6 +45,7 @@ PY = "/home/sichaohe/miniconda3/envs/rl/bin/python"
 ASA_NPY = "/home/sichaohe/ph_work/ph_dm_1200.npy"
 PP_TXT = "/tmp/asa1200_full.txt"
 RP = "/home/sichaohe/ph_work/ripserpp/ripserplusplus/build3/ripser++"
+PROVENANCE = {}
 # The build under test. ⚠ It MUST be compiled with the `gpu` feature: the GPU
 # apparent pre-pass lives behind `#[cfg(feature = "gpu")]`, the feature is in
 # neither `default` nor `[tool.maturin] features`, and a build without it
@@ -85,6 +87,12 @@ life = np.sort(h1[:, 1] - h1[:, 0])[::-1]
 life = life[np.isfinite(life)]
 print("WALL %.3f" % wall)
 print("WALL_COLD %.3f" % cold)
+try:
+    import rayon
+    print("THREADS %d" % rayon.current_num_threads())
+except Exception:
+    print("THREADS 1")
+print("LOADAVG %s" % open("/proc/loadavg").read().split()[0])
 print("BARS " + "|".join(str(len(x)) for x in r))
 print("MD5 " + md5)
 print("H1TOP " + ",".join("%.2f" % x for x in life[:3]))
@@ -97,6 +105,34 @@ def parse_kv(line: str) -> dict:
         if "=" in tok:
             k, _, v = tok.partition("=")
             out[k] = v
+    return out
+
+
+def provenance(site):
+    """What exactly was measured: the commit of the source tree and the md5
+    of the built extension.
+
+    A benchmark table without the build's identity is not reproducible, and
+    the machine is shared -- so the load average travels with every row too.
+    """
+    out = {}
+    src = "/home/sichaohe/canns-lib-dev"
+    try:
+        out["commit"] = subprocess.run(
+            ["git", "-C", src, "rev-parse", "--short", "HEAD"],
+            capture_output=True, text=True, timeout=20).stdout.strip()
+    except Exception:
+        out["commit"] = ""
+    md5 = ""
+    for name in sorted(os.listdir(site)) if os.path.isdir(site) else []:
+        if name.endswith(".so"):
+            p = os.path.join(site, name)
+            try:
+                md5 = hashlib.md5(open(p, "rb").read()).hexdigest()[:16]
+                break
+            except OSError:
+                pass
+    out["build_md5"] = md5
     return out
 
 
@@ -182,6 +218,11 @@ def main() -> int:
     ap.add_argument("--timeout", type=int, default=900)
     args = ap.parse_args()
 
+    global PROVENANCE
+    PROVENANCE = provenance(SITE)
+    print("measured build: commit %s  md5 %s" % (PROVENANCE.get("commit"),
+                                                 PROVENANCE.get("build_md5")),
+          flush=True)
     rows = []
     for rep in range(1, args.reps + 1):
         for who in ("ours", "ripserpp"):
@@ -193,6 +234,10 @@ def main() -> int:
             if who == "ours":
                 rec["wall_s"] = r.get("WALL", "")
                 rec["wall_cold_s"] = r.get("WALL_COLD", "")
+                rec["threads"] = r.get("THREADS", "")
+                rec["loadavg"] = r.get("LOADAVG", "")
+                rec["commit"] = PROVENANCE.get("commit", "")
+                rec["build_md5"] = PROVENANCE.get("build_md5", "")
                 rec["bars"] = r.get("BARS", "")
                 rec["md5"] = r.get("MD5", "")
                 rec["h1top"] = r.get("H1TOP", "")
@@ -238,7 +283,8 @@ def main() -> int:
                   % (rep, who, rec["wall_s"], rec.get("proc_s", ""),
                      rec["bars"], rec["verdict"]), flush=True)
 
-    fields = ["rep", "who", "build", "wall_s", "wall_cold_s", "proc_s", "rss_kb", "bars", "md5", "h1top",
+    fields = ["rep", "who", "build", "wall_s", "wall_cold_s", "proc_s", "rss_kb",
+              "bars", "md5", "h1top", "threads", "loadavg", "commit", "build_md5",
               "s_dim0", "s_edges", "s_d1_reduce", "s_d2_reduce", "s_d2_assemble",
               "s_d2_pivotbuild", "s_d2_gpupre", "s_d2_scan", "s_hashcopy",
               "s_total", "gpu_err", "verdict"]
