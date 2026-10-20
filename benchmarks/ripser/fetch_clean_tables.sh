@@ -2,8 +2,12 @@
 # Fetch the clean tables from the benchmark host and check every one of
 # them, with the quiet-window rule applied.
 #
+# The threshold is 3.0, not 1.5: the load average includes our own
+# measurement, whose footprint on this 16-core host is up to 2.7 cores,
+# while a neighbour's job was 7-9 cores and put the load at 9-19.
+#
 # The tables produced in a quiet window must PROVE it: every checker is run
-# with --max-loadavg 1.5, so a table with a row measured on a busy host is
+# with --max-loadavg 3.0, so a table with a row measured on a busy host is
 # rejected rather than accepted with a footnote. A table that the host
 # marked as contaminated is fetched too, and is expected to fail that
 # check -- that is the test working.
@@ -37,7 +41,7 @@ for t in "${TABLES[@]}"; do
     scp -i "$KEY" -P "$PORT" "sichaohe@$HOST:$remote" "$DELIV/$local" >/dev/null 2>&1
     rows=$(($(wc -l < "$DELIV/$local") - 1))
     echo "--- $tag: $rows rows -> $DELIV/$local"
-    python3 "$REPO/$checker" "$DELIV/$local" --max-loadavg 1.5 $extra 2>&1 | tail -6
+    python3 "$REPO/$checker" "$DELIV/$local" --max-loadavg 3.0 $extra 2>&1 | tail -6
     echo
 done
 

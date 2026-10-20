@@ -24,7 +24,13 @@
 # Everything is written to /tmp; nothing is deleted.
 
 LOG=/tmp/quiet_watch.log
-MAX_LOAD=1.5
+# The load average includes OUR OWN measurement: the reduction runs on the
+# host with one thread per core, and the load average during our own runs
+# was measured at up to 2.7 on this 16-core host. A neighbour's job on the
+# same box was 7-9 cores and put the load average at 9-19. So the
+# threshold has to sit ABOVE our own footprint and BELOW a neighbour's:
+# 3.0 does, and the earlier 1.5 flagged our own runs as contaminated.
+MAX_LOAD=3.0
 
 cd ~/canns-lib-dev || exit 1
 source ~/miniconda3/etc/profile.d/conda.sh

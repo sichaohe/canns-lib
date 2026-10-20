@@ -35,11 +35,20 @@ failure. Each program exits before the next one starts, so the device
 memory itself is released; what is left is only the driver state, and the
 reference cannot wedge it for us if it runs second.
 
-THE WALL CLOCK. `wall_s` is the PROCESS wall clock of both sides: the same
-convention on both, cold start included, so neither side is credited with
-an initialization it did not have to pay. `lib_wall_s` is additionally
-recorded for our side, which is the library's own clock, excluding the
-interpreter start and the matrix load. The paper states both.
+THE WALL CLOCKS. Two of them, and the difference matters.
+
+`wall_s` is the PROCESS wall clock of both sides: cold start included, so
+neither side is credited with an initialization it did not have to pay.
+But that makes it ORDER-SENSITIVE: whichever side runs first pays for a
+cold device context, and that was worth 4% of the comparison -- the size
+of the effect being measured.
+
+`lib_wall_s` is the ENGINE clock of both sides: our library's own clock
+(excluding the interpreter start and the matrix load) and the
+reference's own `total time:` (excluding its device initialisation).
+That is the like-for-like number, and it is what the parity claim is
+made from. The paper states both, and the checker can be asked to
+reject a table measured on a busy host.
 
 USAGE
     python scale_scan.py --site <site> --sizes 1200,1600,2000 [--reps 1]
@@ -352,6 +361,15 @@ def main() -> int:
                     break
                 m = re.search(r"__T__([\d.]+) (\d+)", err_text)
                 r = int(m.group(2)) if m else 0
+                if side != "ours":
+                    # the reference's OWN clock, which excludes its one-time
+                    # device initialisation. Our `lib_wall_s` excludes ours,
+                    # so the two are comparable; the process clocks are not,
+                    # because whichever side runs first pays for a cold
+                    # context -- and that was worth 4% of the comparison.
+                    mt = re.search(r"total time: ([\d.]+)s", err_text)
+                    if mt:
+                        lib_wall = float(mt.group(1))
                 if side == "ours":
                     lw, b = parse_ours(out_text)
                     if lw is None:
