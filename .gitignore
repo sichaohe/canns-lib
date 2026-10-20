@@ -97,6 +97,21 @@ Cargo.lock
 
 # Benchmark results
 benchmarks/ripser/results/
+
+# Corpus-derived tables. The licence of the grid-cell recordings -- and so
+# of the distance matrices derived from them, and of every table computed
+# from those matrices -- has not been settled. The repository had carried
+# two of them: the characterisation (one row per recording, with the
+# corpus' own file names) and the 582-cell benchmark.
+#
+# The matrices themselves were never in the repository, and the numbers the
+# paper quotes are aggregates; but a table that names every recording of
+# the corpus is not "the scripts and the characterisation", and until the
+# licence question is answered the safe set is the smaller one. Both files
+# live in the delivery directory with the rest of the tables.
+benchmarks/ripser/characterize_gridcells.csv
+benchmarks/ripser/gca_results_final.csv
+benchmarks/ripser/gridcells_validation.csv
 benchmarks/spatial/outputs/
 *.json
 
