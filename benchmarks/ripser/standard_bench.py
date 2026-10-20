@@ -48,6 +48,7 @@ import csv
 import json
 import os
 import re
+import signal
 import subprocess
 import sys
 import time
@@ -83,6 +84,32 @@ DATASETS = [
      ["--threshold", "1.4", "--format", "point-cloud", "--dim", "3", "--sparse"],
      "o3_4096.gpu.barcodes"),
 ]
+
+
+def run_timed(argv, stdout_path, timeout):
+    """Run a command with a wall-clock timeout that ACTUALLY fires.
+
+    `/usr/bin/time` is the parent of the program under test, and killing it
+    on timeout leaves the program running as an orphan that still holds the
+    stderr pipe open -- so `subprocess.run(timeout=...)` waits forever on the
+    pipe. The fix is to put the child in its own process group and kill the
+    group.
+    """
+    fo = open(stdout_path, "w")
+    proc = subprocess.Popen(argv, stdout=fo, stderr=subprocess.PIPE,
+                            text=True, start_new_session=True)
+    try:
+        out, err = proc.communicate(timeout=timeout)
+    except subprocess.TimeoutExpired:
+        try:
+            os.killpg(os.getpgid(proc.pid), signal.SIGKILL)
+        except (ProcessLookupError, PermissionError):
+            pass
+        proc.communicate()
+        fo.close()
+        raise
+    fo.close()
+    return out, err
 
 
 def load_dataset(path, kind):
@@ -130,13 +157,11 @@ def parse_ripserpp_barcodes(path):
 def run_pp(key, kind, maxdim, args, timeout):
     """ripser++ on one dataset: returns (wall_s, rss_kb, {dim: bars})."""
     src = os.path.join(EXAMPLES, args["file"])
-    with open("/tmp/_stdbench_pp.out", "w") as fo:
-        t0 = time.perf_counter()
-        p = subprocess.run(["/usr/bin/time", "-f", "__T__%e %M", PP] + args["pp_args"]
-                           + [src], stdout=fo, stderr=subprocess.PIPE,
-                           text=True, timeout=timeout)
-        wall = time.perf_counter() - t0
-    m = re.search(r"__T__([\d.]+) (\d+)", p.stderr)
+    t0 = time.perf_counter()
+    out, err = run_timed(["/usr/bin/time", "-f", "__T__%e %M", PP] + args["pp_args"]
+                         + [src], "/tmp/_stdbench_pp.out", timeout)
+    wall = time.perf_counter() - t0
+    m = re.search(r"__T__([\d.]+) (\d+)", err)
     rss = int(m.group(2)) if m else 0
     proc = float(m.group(1)) if m else 0.0
     bars = parse_ripserpp_barcodes("/tmp/_stdbench_pp.out")
@@ -149,14 +174,12 @@ def run_ripser_cpu(key, kind, maxdim, args, timeout):
     # The `ripser` binary takes no `--format`: it reads a full distance
     # matrix, and a point cloud only through its own converter. The one
     # point-cloud dataset is therefore not runnable with it.
-    with open("/tmp/_stdbench_ripser.out", "w") as fo:
-        t0 = time.perf_counter()
-        p = subprocess.run(["/usr/bin/time", "-f", "__T__%e %M", RIPserCPU]
-                           + args["ripser_cpu_args"] + [src],
-                           stdout=fo, stderr=subprocess.PIPE, text=True,
-                           timeout=timeout)
-        wall = time.perf_counter() - t0
-    m = re.search(r"__T__([\d.]+) (\d+)", p.stderr)
+    t0 = time.perf_counter()
+    out, err = run_timed(["/usr/bin/time", "-f", "__T__%e %M", RIPserCPU]
+                         + args["ripser_cpu_args"] + [src],
+                         "/tmp/_stdbench_ripser.out", timeout)
+    wall = time.perf_counter() - t0
+    m = re.search(r"__T__([\d.]+) (\d+)", err)
     rss = int(m.group(2)) if m else 0
     proc = float(m.group(1)) if m else 0.0
     bars = parse_ripserpp_barcodes("/tmp/_stdbench_ripser.out")
@@ -201,15 +224,13 @@ bars = {d: [(float(a), float(b)) for a, b in x] for d, x in enumerate(r)}
 print("WALL %.3f" % wall)
 print("BARS " + json.dumps(bars))
 '''
-    with open("/tmp/_stdbench_ours.out", "w") as fo:
-        t0 = time.perf_counter()
-        p = subprocess.run(["/usr/bin/time", "-f", "__T__%e %M", PY, "-c", child,
-                            site, src, kind, str(maxdim),
-                            "1.4" if key == "o3_4096" else "inf", str(coeff)],
-                           stdout=fo, stderr=subprocess.PIPE, text=True,
-                           timeout=timeout)
-        wall = time.perf_counter() - t0
-    m = re.search(r"__T__([\d.]+) (\d+)", p.stderr)
+    t0 = time.perf_counter()
+    out, err = run_timed(["/usr/bin/time", "-f", "__T__%e %M", PY, "-c", child,
+                          site, src, kind, str(maxdim),
+                          "1.4" if key == "o3_4096" else "inf", str(coeff)],
+                         "/tmp/_stdbench_ours.out", timeout)
+    wall = time.perf_counter() - t0
+    m = re.search(r"__T__([\d.]+) (\d+)", err)
     rss = int(m.group(2)) if m else 0
     proc = float(m.group(1)) if m else 0.0
     bars, reported = {}, None
