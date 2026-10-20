@@ -29,7 +29,7 @@
 #
 # The measurements, in order: the scale scan; the ablation variants and the
 # unified ablation table; the standard suite with five repetitions; the
-# reference CPU baseline; the contention sweep.
+# reference CPU baseline.
 #
 # Everything is written to /tmp; nothing is deleted.
 
@@ -140,10 +140,6 @@ for i in $(seq 1 1440); do
                 python benchmarks/ripser/standard_bench.py --sides ripser_cpu \
                 --reps 2 --timeout 900 --out /tmp/standard_bench_ripser_cpu_clean.csv
             echo "$(date +%Y-%m-%dT%H:%M:%S) reference CPU baseline done" >> "$LOG"
-            measure /tmp/contention_sweep_clean.csv /tmp/contention_sweep_clean.log \
-                python benchmarks/ripser/contention_sweep.py --levels 0,4,8 --reps 2 \
-                --out /tmp/contention_sweep_clean.csv
-            echo "$(date +%Y-%m-%dT%H:%M:%S) contention sweep done" >> "$LOG"
         else
             echo "$(date +%Y-%m-%dT%H:%M:%S) the scale scan was contaminated -- waiting for another window" >> "$LOG"
         fi

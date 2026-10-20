@@ -20,7 +20,10 @@
 # A BATCH IS ALL OR NOTHING: if any cell was measured while somebody else
 # was using the host, the whole table is moved aside and the window is
 # waited for again.
-set -uo pipefail
+# NOT `set -u`: conda's activate script reads ADDR2LINE, which is not
+# set in a non-interactive shell, and `set -u` turns that into a
+# fatal error that kills this script before it measures anything.
+set -eo pipefail
 
 LOG=/tmp/corpus_watch.log
 REPO=${CANNS_BENCH_REPO:-/home/sichaohe/canns-lib-dev}

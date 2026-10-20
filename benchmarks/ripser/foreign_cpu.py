@@ -42,6 +42,18 @@ whose start time changed is not compared with itself.
 The probe is deliberately conservative about processes that appear or
 disappear inside a sampling window: they contribute nothing, so the
 reading can understate a very short neighbour -- it cannot overstate one.
+
+ONE KNOWN BIAS, IN THE STRICT DIRECTION. The rate of a sampling window is
+computed over the nominal interval, but reading a few hundred /proc files
+takes some milliseconds, so the window is slightly LONGER than the
+interval and the rate is over-reported by that much -- on this host, a few
+per cent. It over-reports, so the gate is stricter than the truth and a
+table that passes it passes more easily, not less; the measured values in
+the tables are two orders of magnitude below the threshold, so the bias
+is irrelevant to them. The mean is diluted by the same amount in the
+other direction, because the first sampling window is not covered by the
+elapsed time; both effects are small and both are recorded rather than
+corrected, so that the tables and the code that produced them agree.
 """
 
 import os

@@ -76,10 +76,16 @@ def load_tables(paths):
 
 
 def check(paths, datasets=None, sides=None, min_reps=5, max_loadavg=0.0,
-          max_foreign_cpu=0.25):
+          max_foreign_cpu=0.25, reference_sides=None):
     """Returns a list of failure strings (empty == PASS)."""
     datasets = datasets or DATASETS
     sides = sides or SIDES
+    # The sides that ARE a reference implementation: for those, the
+    # "does it match ripser++ run here" column is empty by construction --
+    # they are what the other sides are compared against. The main table's
+    # reference is pp_gpu (ripser++); the standalone CPU-baseline table's
+    # reference is ripser_cpu, which is the whole point of that table.
+    reference_sides = tuple(reference_sides or ("pp_gpu",))
     fails = []
     if isinstance(paths, str):
         paths = [paths]
@@ -141,7 +147,7 @@ def check(paths, datasets=None, sides=None, min_reps=5, max_loadavg=0.0,
                 if r["match_expected"] != "yes":
                     fails.append("%s / %s rep %s: does not match the published "
                                  "reference" % (ds, side, r.get("rep", "?")))
-                if side != "pp_gpu" and r["match_pp"] != "yes":
+                if side not in reference_sides and r["match_pp"] != "yes":
                     fails.append("%s / %s rep %s: does not match ripser++ run "
                                  "here" % (ds, side, r.get("rep", "?")))
                 try:
@@ -293,6 +299,16 @@ def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("csv", nargs="*", default=["standard_bench.csv"])
     ap.add_argument("--min-reps", type=int, default=5)
+    ap.add_argument("--sides", default=",".join(SIDES),
+                    help="comma-separated sides to require in the grid; the "
+                         "default is the three compared sides. The standalone "
+                         "CPU-baseline table holds only ripser_cpu, so it is "
+                         "checked with --sides ripser_cpu")
+    ap.add_argument("--reference-side", default="pp_gpu",
+                    help="comma-separated sides that ARE a reference "
+                         "implementation: for those the 'does it match "
+                         "ripser++ run here' column is empty by construction, "
+                         "so it is not required")
     ap.add_argument("--max-loadavg", type=float, default=0.0,
                     help="fail if any row was measured at or above this load "
                          "average; 0 = do not check. The load average counts "
@@ -305,12 +321,21 @@ def main() -> int:
     ap.add_argument("--self-test", action="store_true")
     args = ap.parse_args()
 
-    fails = check(args.csv, min_reps=args.min_reps, max_loadavg=args.max_loadavg,
-                  max_foreign_cpu=args.max_foreign_cpu)
+    sides = [s.strip() for s in args.sides.split(",") if s.strip()]
+    reference_sides = [s.strip() for s in args.reference_side.split(",")
+                       if s.strip()]
+    if not sides:
+        print("no sides to check", file=sys.stderr)
+        return 2
+
+    fails = check(args.csv, sides=sides, min_reps=args.min_reps,
+                  max_loadavg=args.max_loadavg,
+                  max_foreign_cpu=args.max_foreign_cpu,
+                  reference_sides=reference_sides)
     print("required cells  : %d datasets x %d compared sides = %d"
-          % (len(DATASETS), len(SIDES), len(DATASETS) * len(SIDES)))
+          % (len(DATASETS), len(sides), len(DATASETS) * len(sides)))
     print("required rows   : that x %d repetitions = %d"
-          % (args.min_reps, len(DATASETS) * len(SIDES) * args.min_reps))
+          % (args.min_reps, len(DATASETS) * len(sides) * args.min_reps))
     print("(the reference CPU implementation is reported alongside them; it is a")
     print(" baseline, not a side under test, so it is not part of the grid)")
     n = len(load_tables(args.csv)[0])
@@ -331,8 +356,10 @@ def main() -> int:
             for kind in MUTATIONS:
                 dst = os.path.join(tmp, "mut_%s.csv" % kind)
                 mutate(args.csv[0], dst, kind)
-                f = check(dst, min_reps=args.min_reps, max_loadavg=args.max_loadavg,
-                          max_foreign_cpu=args.max_foreign_cpu)
+                f = check(dst, sides=sides, min_reps=args.min_reps,
+                          max_loadavg=args.max_loadavg,
+                          max_foreign_cpu=args.max_foreign_cpu,
+                          reference_sides=reference_sides)
                 if f:
                     print("  self-test %-16s -> correctly FAILED (%d problem(s))"
                           % (kind, len(f)))
