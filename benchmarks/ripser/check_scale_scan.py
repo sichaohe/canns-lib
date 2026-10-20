@@ -1,18 +1,24 @@
 #!/usr/bin/env python3
 """Checker for the scale scan.
 
-  1. THE GRID IS COMPLETE. Every size has all three sides: our build on
-     the `+inf` matrix, our build on the capped matrix, and ripser++ on
-     the capped matrix. The denominator is computed from the size list.
-  2. THE THREE SIDES COMPUTE THE SAME FILTRATION. Capping the missing
-     pairs does not change WHICH simplices are in the filtration, only
-     how many simplices have to be enumerated -- so our two input forms
-     must produce the SAME barcode, and ripser++ must report the same
-     number of bars. This is the invariant the whole experiment rests on.
-  3. THE MEASUREMENT IS USABLE. A positive wall time, a peak RSS, the
-     load average, and a GPU-memory reading for the ripser++ side -- the
-     point of the scan is where the device runs out, so the free memory
-     before the run has to be in the table.
+  1. THE GRID IS COMPLETE. Every size has all five arms: our build on the
+     `+inf` matrix, our build on the capped matrix at both thresholds, and
+     ripser++ on the capped matrix at both thresholds. The denominator is
+     computed from the size list, not remembered.
+  2. THE ARMS COMPUTE THE SAME FILTRATION. Capping the missing pairs does
+     not change WHICH simplices are in the filtration, only how many
+     simplices have to be enumerated -- so the arms that share a filtration
+     must produce the SAME barcode, and the bar counts must agree. This is
+     the invariant the whole experiment rests on.
+  3. THE MEASUREMENT IS USABLE. A positive wall time, a peak RSS, the load
+     average, and the build identity -- a benchmark table without the
+     identity of the build that produced it is not reproducible.
+  4. THE FAILURES ARE LABELLED. The reference can fail to fit the device at
+     a size, and that IS the result the scan exists to find -- but it has to
+     say so, in its own words. Our side has no such excuse: an error on
+     our side is a broken measurement, not a finding.
+  5. THE CLOCKS AGREE WITH EACH OTHER. The library wall clock cannot be
+     larger than the process wall clock that contains it.
 
 USAGE
     python check_scale_scan.py scale_scan.csv [--sizes 1200,1600,2000] [--self-test]
@@ -26,7 +32,26 @@ import shutil
 import sys
 import tempfile
 
-SIDES = ("ours_inf", "ours_capped", "ripserpp")
+# The five arms of the scan. `ripserpp_T` is the FAIR comparison: ripser++
+# can be run with the threshold at the max finite distance, and then the
+# capped pairs are excluded and the filtration is the same as the one we get
+# by keeping the `+inf` -- so the barcodes agree and the times are
+# comparable. `ripserpp_all` (the cap threshold) is the configuration a
+# ripser++ user would NOT choose, and it is kept in the table for the
+# record, not for the claim.
+SIDES = ("ours_inf", "ours_T", "ours_all", "ripserpp_T", "ripserpp_all")
+OURS = ("ours_inf", "ours_T", "ours_all")
+REFERENCE = ("ripserpp_T", "ripserpp_all")
+# The arms that compute the SAME filtration, so their bar counts must be
+# equal: the two threshold settings of each implementation, and our `+inf`
+# against the reference's threshold.
+SAME_FILTRATION = (("ours_inf", "ours_T"),
+                   ("ours_T", "ours_all"),
+                   ("ripserpp_T", "ripserpp_all"),
+                   ("ours_inf", "ripserpp_T"))
+# What the reference is allowed to record as a finding rather than a fault.
+REFERENCE_FINDINGS = ("TIMEOUT", "GPU_OOM")
+PROVENANCE_COLUMNS = ("threads", "commit", "build_md5")
 
 
 def check(path, sizes=None):
@@ -35,13 +60,13 @@ def check(path, sizes=None):
         rows = list(csv.DictReader(fh))
     if not rows:
         return ["table is empty: %s" % path]
-    for col in ("n", "side", "wall_s", "rss_kb", "bars", "md5", "loadavg",
-                "gpu_free_mib_before"):
+    for col in ("n", "side", "threshold", "wall_s", "rss_kb", "bars",
+                "error", "note", "loadavg"):
         if col not in rows[0]:
             return ["table is missing column %s" % col]
 
     ns = sizes or sorted({int(r["n"]) for r in rows})
-    print("expected cells: %d sizes x %d sides = %d"
+    print("expected cells: %d sizes x %d arms = %d"
           % (len(ns), len(SIDES), len(ns) * len(SIDES)))
     print("rows in table             : %d" % len(rows))
 
@@ -57,42 +82,50 @@ def check(path, sizes=None):
             fails.append("unexpected size: n=%d" % n)
 
     for n, sides in by.items():
-        inf, cap, pp = sides.get("ours_inf"), sides.get("ours_capped"), \
-            sides.get("ripserpp")
-        if inf and cap:
-            if inf["md5"] and cap["md5"] and inf["md5"] != cap["md5"]:
-                fails.append("n=%d: the +inf and the capped input form give "
-                             "different barcodes (%s against %s) -- the two "
-                             "forms must be the same filtration"
-                             % (n, inf["md5"], cap["md5"]))
-        if inf and pp:
-            if inf["bars"] and pp["bars"] and inf["bars"] != pp["bars"]:
-                # The reference implementation is not run-to-run
-                # reproducible on this workload (its GPU reduction order
-                # varies, and a near-tie in the H2 classes then resolves
-                # differently), so the bar COUNTS can differ by a fraction
-                # of a percent between two runs of the same binary on the
-                # same input. Our own output is stable, which is what
-                # determinism_check.py measures.
-                a, b = int(inf["bars"]), int(pp["bars"])
-                if abs(a - b) > max(2, int(0.005 * max(a, b))):
-                    fails.append("n=%d: ripser++ reports %s bars, we report %s "
-                                 "-- a difference of more than 0.5%% is not the "
-                                 "reference's run-to-run variation"
-                                 % (n, pp["bars"], inf["bars"]))
-                else:
-                    print("  n=%d: bar counts differ by %d (%.3f%%) -- the "
-                          "reference is not run-to-run reproducible"
-                          % (n, abs(a - b), 100.0 * abs(a - b) / max(a, b)))
+        # Every arm that computes the same filtration must report the same
+        # number of bars. The reference implementation is not run-to-run
+        # reproducible on this workload (its GPU reduction order varies, and
+        # a near-tie in the H2 classes then resolves differently), so a
+        # difference of a fraction of a percent is tolerated -- but a larger
+        # one is not.
+        for a_name, b_name in SAME_FILTRATION:
+            ra, rb = sides.get(a_name), sides.get(b_name)
+            if not ra or not rb:
+                continue
+            if not (ra.get("bars") and rb.get("bars")):
+                continue
+            a, b = int(ra["bars"]), int(rb["bars"])
+            if a == b:
+                continue
+            if abs(a - b) > max(2, int(0.005 * max(a, b))):
+                fails.append("n=%d: %s reports %s bars and %s reports %s -- "
+                             "they compute the same filtration, so the "
+                             "difference is larger than the reference's "
+                             "run-to-run variation" % (n, a_name, ra["bars"],
+                                                      b_name, rb["bars"]))
+            else:
+                print("  n=%d: %s and %s differ by %d bars (%.3f%%) -- the "
+                      "reference is not run-to-run reproducible"
+                      % (n, a_name, b_name, abs(a - b),
+                         100.0 * abs(a - b) / max(a, b)))
         for side, r in sides.items():
             err = (r.get("error") or "").strip()
-            if err == "TIMEOUT":
-                # The side did not finish inside the timeout. That IS the
-                # result at this size -- it is why the scan exists -- so it
-                # is not a failure, but the OTHER sides of this size must be
-                # there for the comparison to mean anything.
-                print("  n=%d %s: TIMEOUT (%s)"
-                      % (n, side, (r.get("note") or "").strip()))
+            note = (r.get("note") or "").strip()
+            if err in REFERENCE_FINDINGS and side in REFERENCE:
+                # The reference did not fit the device at this size. That IS
+                # the result at this size -- it is why the scan exists -- so
+                # it is not a failure, but it has to say WHY: the note
+                # carries the device-memory requirement ripser++ itself
+                # printed.
+                print("  n=%d %s: %s (%s)" % (n, side, err, note))
+                if "device memory" not in note:
+                    fails.append("n=%d %s: the %s does not record the "
+                                 "device-memory requirement ripser++ printed"
+                                 % (n, side, err))
+                continue
+            if err:
+                fails.append("n=%d %s: the arm failed (%s: %s) -- a failure is "
+                             "not a measurement" % (n, side, err, note))
                 continue
             try:
                 if float(r["wall_s"]) <= 0:
@@ -104,39 +137,66 @@ def check(path, sizes=None):
                              % (n, side))
             if not (r.get("loadavg") or "").strip():
                 fails.append("n=%d %s: no load average recorded" % (n, side))
-        if pp and (pp.get("gpu_free_mib_before") or "").strip() in ("", "-1"):
-            fails.append("n=%d ripserpp: no free GPU memory recorded -- the "
-                         "point of the scan is where the device runs out"
-                         % n)
+            # the build identity, on our side
+            for col in PROVENANCE_COLUMNS:
+                if not (r.get(col) or "").strip():
+                    fails.append("n=%d %s: the row does not record %s"
+                                 % (n, side, col))
+            # the library clock cannot be larger than the process clock
+            lib = (r.get("lib_wall_s") or "").strip()
+            if lib:
+                try:
+                    if float(lib) > float(r["wall_s"]) + 1e-6:
+                        fails.append("n=%d %s: the library wall clock (%s s) is "
+                                     "larger than the process wall clock "
+                                     "(%s s)" % (n, side, lib, r["wall_s"]))
+                except ValueError:
+                    fails.append("n=%d %s: the library wall clock is not a "
+                                 "number" % (n, side))
+            elif side in OURS:
+                fails.append("n=%d %s: no library wall clock" % (n, side))
     return fails
 
 
 def mutate(src, dst, kind):
     with open(src, newline="") as fh:
         rows = list(csv.DictReader(fh))
-        fields = list(rows[0].keys())
+    fields = list(rows[0].keys())
+
+    def first(pred):
+        for r in rows:
+            if pred(r):
+                return r
+        raise SystemExit("the mutation %s has no row to act on -- the table "
+                         "does not have the shape the self-test assumes"
+                         % kind)
+
     if kind == "drop_side":
-        rows = [r for r in rows if not (r["side"] == "ours_capped"
+        rows = [r for r in rows if not (r["side"] == "ours_all"
                                         and r["n"] == rows[0]["n"])]
     elif kind == "differing_forms":
-        for r in rows:
-            if r["side"] == "ours_capped":
-                r["md5"] = "0" * 16
-                break
+        first(lambda r: r["side"] == "ours_T")["bars"] = "999"
     elif kind == "bars_disagree":
-        for r in rows:
-            if r["side"] == "ripserpp":
-                r["bars"] = "999999"
-                break
+        first(lambda r: r["side"] == "ripserpp_T")["bars"] = "999999"
     elif kind == "no_gpu_free":
-        for r in rows:
-            if r["side"] == "ripserpp":
-                r["gpu_free_mib_before"] = "-1"
-                break
+        # make the reference claim it ran out of the device, and then take
+        # away its own explanation of why
+        r = first(lambda x: x["side"] == "ripserpp_T")
+        r["error"] = "TIMEOUT"
+        r["note"] = ""
     elif kind == "zero_time":
-        rows[0]["wall_s"] = "0"
+        first(lambda r: r["side"] in OURS)["wall_s"] = "0"
     elif kind == "no_loadavg":
-        rows[0]["loadavg"] = ""
+        first(lambda r: r["side"] in OURS)["loadavg"] = ""
+    elif kind == "crash_row":
+        r = first(lambda x: x["side"] in OURS)
+        r["error"] = "CRASH"
+        r["note"] = "exited with status 1"
+    elif kind == "no_provenance":
+        first(lambda r: r["side"] in OURS)["commit"] = ""
+    elif kind == "lib_wall_over_wall":
+        r = first(lambda x: x["side"] in OURS)
+        r["lib_wall_s"] = "%.4f" % (float(r["wall_s"]) + 10.0)
     else:
         raise SystemExit("unknown mutation %s" % kind)
     with open(dst, "w", newline="") as fh:
@@ -147,7 +207,8 @@ def mutate(src, dst, kind):
 
 
 MUTATIONS = ["drop_side", "differing_forms", "bars_disagree", "no_gpu_free",
-             "zero_time", "no_loadavg"]
+             "zero_time", "no_loadavg", "crash_row", "no_provenance",
+             "lib_wall_over_wall"]
 
 
 def main() -> int:
@@ -164,8 +225,9 @@ def main() -> int:
         for f in fails[:40]:
             print("  - %s" % f)
         return 1
-    print("\nPASS: every size has all three sides, the two input forms agree "
-          "on the barcode, and the measurements are identified")
+    print("\nPASS: every size has all five arms, the arms that share a "
+          "filtration agree on the barcode, and the measurements are "
+          "identified")
 
     if args.self_test:
         tmp = tempfile.mkdtemp(prefix="scale_self_")

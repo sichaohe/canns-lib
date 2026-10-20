@@ -32,9 +32,15 @@ import sys
 import tempfile
 
 MATRIX_DIR = "/home/sichaohe/gridcells/matrices"
+# The corpus' own five arms, plus the FAIR ripser++ arm: the corpus runs
+# ripser++ with the cap as the threshold, and the T arm (the threshold at
+# the maximum finite distance) is the configuration a ripser++ user would
+# actually choose. At maxdim=1 the two are the same filtration -- the
+# threshold is the maximum finite distance, so every finite edge is in
+# both -- and the measured medians agree (0.620x against 0.631x).
 ARMS = [("canns-gpu", "inf_preserved"), ("canns-gpu", "capped"),
         ("canns-cpu", "inf_preserved"), ("canns-cpu", "capped"),
-        ("ripserpp", "capped")]
+        ("ripserpp", "capped"), ("ripserpp_T", "capped")]
 
 REQUIRED = ["matrix", "target", "input_form", "wall_s", "peak_rss_kb",
             "bars_d0", "bars_d1", "h1_top3", "h1_md5", "ref_h1_top3",
@@ -127,13 +133,13 @@ def check(path, matrix_dir=MATRIX_DIR):
                 fails.append("%s/%s/%s: the H1 top-3 %s does not reproduce the "
                              "manifest reference %s"
                              % (m, r["target"], r["input_form"], got, ref))
-        pp = [r for r in rs if r["target"] == "ripserpp"]
+        pp = [r for r in rs if r["target"].startswith("ripserpp")]
         for r in pp:
             for arm in canns:
                 if r.get("bars_d1") and arm.get("bars_d1") and \
                         r["bars_d1"] != arm["bars_d1"]:
-                    fails.append("%s: ripser++ reports %s H1 bars, canns-lib %s"
-                                 % (m, r["bars_d1"], arm["bars_d1"]))
+                    fails.append("%s: %s reports %s H1 bars, canns-lib %s"
+                                 % (m, r["target"], r["bars_d1"], arm["bars_d1"]))
     return fails
 
 
