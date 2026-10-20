@@ -98,6 +98,14 @@ def check(paths, datasets=None, sides=None, min_reps=5):
     for r in rows:
         groups.setdefault((r["dataset"], r["side"]), []).append(r)
 
+    # the device column must be present and uniform: a table whose device
+    # column was written by hand, or whose rows came from different
+    # devices, is not a table whose rows are comparable
+    devices = {(r.get("gpu") or "").strip() for r in rows}
+    if len(devices) != 1 or not devices.pop():
+        fails.append("the device column is not uniform and non-empty: %r"
+                     % sorted(devices))
+
     for ds in datasets:
         for side in sides:
             rs = groups.get((ds, side))
@@ -198,6 +206,9 @@ def mutate(src, dst, kind):
             raise SystemExit("the mutation drop_rep has no cell to thin")
         kept = [r for r in rows if (r["dataset"], r["side"]) != key]
         rows = kept + [r for r in rows if (r["dataset"], r["side"]) == key][:1]
+    elif kind == "mixed_device":
+        r = first(lambda x: x["verdict"] == "SAME_BARCODE")
+        r["gpu"] = "1"
     elif kind == "one_bad_rep":
         first(lambda r: r["side"] == "gpu" and r["verdict"] == "SAME_BARCODE"
               )["verdict"] = "BARCODE_MISMATCH"
@@ -211,7 +222,8 @@ def mutate(src, dst, kind):
 
 
 MUTATIONS = ["flip_verdict", "break_expected", "break_pp", "drop_row",
-             "dup_row", "zero_time", "no_rss", "drop_rep", "one_bad_rep"]
+             "dup_row", "zero_time", "no_rss", "drop_rep", "one_bad_rep",
+             "mixed_device"]
 
 
 def main() -> int:
