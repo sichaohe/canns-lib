@@ -54,12 +54,14 @@ def main() -> int:
     a2 = col(rows, "dim2_apparent_frac")
     c1 = col(rows, "dim1_cols")
     c2 = col(rows, "dim2_cols")
-    wall = col(rows, "wall_s")
+    wall = col(rows, "ph_wall_s") or col(rows, "wall_s")
 
     shares = {"dim2": [], "dim1": [], "pre": [], "piv": [], "asm": [], "oth": []}
     for r in rows:
         try:
-            w = float(r["wall_s"])
+            # The LIBRARY wall: the process wall also carries the
+            # interpreter start and the .npy load.
+            w = float(r.get("ph_wall_s") or r["wall_s"])
         except (TypeError, ValueError):
             continue
         if w <= 0:
