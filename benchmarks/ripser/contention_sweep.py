@@ -49,8 +49,8 @@ REF_MD5 = ("ee1f5283091dd645a3dd53e6f1a7eac6:"
            "2d018d8fe9c1895b1b74f837af59ed20")
 REF_BARS = "1195|481|58"
 
-FIELDS = ["level", "side", "rep", "wall_s", "proc_s", "rss_kb", "bars", "md5",
-          "loadavg", "gpu", "verdict"]
+FIELDS = ["pass", "level", "side", "rep", "wall_s", "proc_s", "rss_kb", "bars",
+          "md5", "loadavg", "gpu", "verdict"]
 
 CHILD = r'''
 import hashlib, sys, time
@@ -198,7 +198,10 @@ def main() -> int:
           % (dev, levels, order, T), flush=True)
 
     rows = []
-    for level in order:
+    for step, level in enumerate(order):
+        # the sweep goes up and back down, so the same level appears twice
+        # with the same repetition numbers; the pass tells the two apart
+        pass_no = 1 if step < len(levels) else 2
         procs = start_competitors(level)
         time.sleep(args.settle)
         for rep in range(1, args.reps + 1):
@@ -212,7 +215,7 @@ def main() -> int:
                 ok = (r.get("rc") == 0 and r.get("bars") == REF_BARS
                       and (side == "ripserpp" or r.get("md5") == REF_MD5))
                 rows.append({
-                    "level": level, "side": side, "rep": rep,
+                    "pass": pass_no, "level": level, "side": side, "rep": rep,
                     "wall_s": r.get("WALL", ""), "proc_s": r.get("proc_s", ""),
                     "rss_kb": r.get("rss_kb", ""), "bars": r.get("bars", ""),
                     "md5": r.get("md5", ""),
@@ -220,8 +223,8 @@ def main() -> int:
                     "gpu": dev,
                     "verdict": "OK" if ok else "BADCODE",
                 })
-                print("level=%-2d %-9s rep%d wall=%-8s bars=%-12s load=%-6s %s"
-                      % (level, side, rep, r.get("WALL", ""), r.get("bars", ""),
+                print("pass=%d level=%-2d %-9s rep%d wall=%-8s bars=%-12s load=%-6s %s"
+                      % (pass_no, level, side, rep, r.get("WALL", ""), r.get("bars", ""),
                          rows[-1]["loadavg"], rows[-1]["verdict"]), flush=True)
         stop_competitors(procs)
         time.sleep(1.0)

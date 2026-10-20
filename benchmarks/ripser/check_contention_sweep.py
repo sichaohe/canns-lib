@@ -23,7 +23,7 @@ import statistics
 import sys
 import tempfile
 
-REQUIRED = ["level", "side", "rep", "wall_s", "bars", "loadavg", "gpu",
+REQUIRED = ["pass", "level", "side", "rep", "wall_s", "bars", "loadavg", "gpu",
             "verdict"]
 SIDES = ("ours", "ripserpp")
 
@@ -40,18 +40,44 @@ def check(path):
 
     levels = sorted({int(r["level"]) for r in rows})
     reps = sorted({int(r["rep"]) for r in rows})
-    print("levels %s x sides %d x repetitions %d = %d rows expected"
-          % (levels, len(SIDES), len(reps),
-             len(levels) * len(SIDES) * len(reps)))
+    passes = sorted({int(r["pass"]) for r in rows})
+    # the sweep goes UP and BACK DOWN, so the peak level is visited once and
+    # the others twice: the grid is the set of (pass, level) pairs that
+    # exist, not the product of the levels with the passes
+    cells = sorted({(int(r["pass"]), int(r["level"])) for r in rows})
+    print("levels %s, passes %s, repetitions %d" % (levels, passes, len(reps)))
+    print("(pass, level) cells: %s" % cells)
+    print("rows expected: %d cells x %d sides x %d repetitions = %d"
+          % (len(cells), len(SIDES), len(reps),
+             len(cells) * len(SIDES) * len(reps)))
     print("rows in table                    : %d" % len(rows))
 
     by = {}
+    seen = set()
     for r in rows:
+        key = (int(r["pass"]), int(r["level"]), r["side"], int(r["rep"]))
+        if key in seen:
+            fails.append("duplicated row: pass %d level %d %s rep %d" % key)
+            continue
+        seen.add(key)
         by.setdefault((int(r["level"]), r["side"]), []).append(r)
-    for lv in levels:
+    # every (pass, level) cell must have both sides, with the same
+    # repetitions -- otherwise one side was measured somewhere the other
+    # was not, and the comparison at that level is not a comparison
+    per_side_cells = {}
+    for side in SIDES:
+        per_side_cells[side] = sorted(
+            {(int(r["pass"]), int(r["level"])) for r in rows if r["side"] == side})
+    if per_side_cells[SIDES[0]] != per_side_cells[SIDES[1]]:
+        fails.append("the two sides were not measured in the same cells: "
+                     "%s against %s" % (per_side_cells[SIDES[0]],
+                                        per_side_cells[SIDES[1]]))
+    for (p, lv) in cells:
         for side in SIDES:
-            if not by.get((lv, side)):
-                fails.append("missing cell: level %d / %s" % (lv, side))
+            got = [x for x in by.get((lv, side), []) if int(x["pass"]) == p]
+            if len(got) != len(reps):
+                fails.append("pass %d level %d / %s: %d repetition(s), "
+                             "expected %d" % (p, lv, side, len(got), len(reps)))
     for side in SIDES:
         if not by.get((0, side)):
             fails.append("no baseline: level 0 / %s is missing, and without "

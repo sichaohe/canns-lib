@@ -54,8 +54,21 @@ pub fn rips_dm(
 /// first two clauses, `threshold = T < M` sends that ordinary dense matrix
 /// down the sparse path, which measured 51.0 s against the dense path's
 /// 12.0 s on the same matrix with the same barcode.
+///
+/// The `legacy-auto-sparse` feature restores the pre-fix condition. It
+/// exists for the ablation table -- "all switches on against exactly this
+/// one off" -- and it is never enabled in a shipped build. The unit tests
+/// below pin the FIXED behaviour, so they fail with the feature on: that
+/// is by design, and the point of the feature is to measure the old
+/// behaviour, not to endorse it.
+#[cfg(not(feature = "legacy-auto-sparse"))]
 pub fn use_sparse_representation(threshold: f32, max_finite: f32, has_non_finite: bool) -> bool {
     threshold < max_finite && max_finite.is_finite() && has_non_finite
+}
+
+#[cfg(feature = "legacy-auto-sparse")]
+pub fn use_sparse_representation(threshold: f32, max_finite: f32, _has_non_finite: bool) -> bool {
+    threshold < max_finite && max_finite.is_finite()
 }
 
 pub fn rips_dm_with_callback_and_interval(

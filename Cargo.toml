@@ -74,6 +74,20 @@ parallel = ["rayon"]
 # `coboundary_heap::pop_order_matches_binary_heap`.
 binary-heap = []
 
+# Opt-OUT: restore the pre-2026-10-20 auto-sparse condition, in which the
+# sparse distance matrix was used whenever the threshold was below the
+# maximum finite distance -- without requiring the matrix to actually
+# contain a missing pair. The ASA pipeline replaces the ~30% of `+inf`
+# pairs with M = 2*max_finite + 1, so `max_finite` becomes M and every
+# threshold T < M sent an ordinary DENSE matrix down the sparse path, which
+# is 4.3x slower here on identical work.
+#
+# This feature exists for the ablation table -- "all switches on against
+# exactly this one off" -- and is never enabled in a shipped build. The
+# unit tests pin the FIXED behaviour, so they fail with the feature on:
+# that is by design.
+legacy-auto-sparse = []
+
 # Opt-in: count cofacets examined / columns scanned during the apparent-pair
 # pre-pass and report them in the STATS line. OFF by default on purpose: the
 # counter sits in the innermost loop, and even an empty-branch check measured

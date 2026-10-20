@@ -1,19 +1,21 @@
 #!/usr/bin/env python3
 """Checker for the unified ablation table.
 
-  1. THE GRID IS COMPLETE. Every change x every arm x every repetition
-     must have BOTH a `before` and an `after` measurement. The denominator
-     is computed here from the table's own contents, not remembered.
+The table is "all switches on, against exactly one off", so:
+
+  1. THE GRID IS COMPLETE. Every variant x every arm x every repetition,
+     and the baseline ("all_on") has to be there for every arm -- without
+     it there is nothing to compare against. The denominator is computed
+     from the table's own contents.
   2. EVERY RUN REPRODUCED THE REFERENCE BARCODE. An ablation row that
      changed the answer is not an ablation row, it is a bug.
-  3. THE MEASUREMENTS ARE IDENTIFIED. The load average, the device and the
-     source fingerprint are on every row, so a reader can tell what was
-     measured and on what.
-  4. THE EFFECT IS STATED WITH ITS NOISE. The checker prints the median
-     of the `after` over the median of the `before`, and compares the
-     effect with the spread of the `before` measurements themselves: an
-     effect smaller than the measurement's own spread is reported as
-     "within noise", not as a win.
+  3. THE MEASUREMENTS ARE IDENTIFIED. The load average, the device, the
+     source fingerprint and the build are on every row.
+  4. THE EFFECT IS STATED WITH ITS NOISE. The checker prints, for each
+     variant and arm, the median of the variant over the median of the
+     baseline, and compares the effect with the spread of the baseline's
+     own measurements: an effect smaller than the measurement's own spread
+     is reported as "within noise", not as a win.
 
 USAGE
     python check_unified_ablation.py unified_ablation.csv [--self-test]
@@ -28,96 +30,96 @@ import statistics
 import sys
 import tempfile
 
-REQUIRED = ["rep", "change", "arm", "role", "build", "wall_s", "rss_kb",
+REQUIRED = ["rep", "variant", "feature", "arm", "build", "wall_s", "rss_kb",
             "bars", "md5", "verdict", "loadavg", "gpu", "commit"]
-ROLES = ("before", "after")
-
-
-def load(path):
-    with open(path, newline="") as fh:
-        return list(csv.DictReader(fh))
+BASELINE = "all_on"
 
 
 def check(path, min_reps=3):
     fails = []
-    rows = load(path)
+    with open(path, newline="") as fh:
+        rows = list(csv.DictReader(fh))
     if not rows:
         return ["table is empty: %s" % path]
     missing = [c for c in REQUIRED if c not in rows[0]]
     if missing:
         return ["table is missing columns: %s" % ", ".join(missing)]
 
-    changes = sorted({r["change"] for r in rows})
+    variants = sorted({r["variant"] for r in rows})
     arms = sorted({r["arm"] for r in rows})
     reps = sorted({int(r["rep"]) for r in rows})
-    print("changes %d x arms %d x repetitions %d x roles %d = %d rows expected"
-          % (len(changes), len(arms), len(reps), len(ROLES),
-             len(changes) * len(arms) * len(reps) * len(ROLES)))
+    print("variants %s x arms %d x repetitions %d = %d rows expected"
+          % (variants, len(arms), len(reps),
+             len(variants) * len(arms) * len(reps)))
     print("rows in table                    : %d" % len(rows))
 
-    cells = {}
+    by = {}
     for r in rows:
-        key = (r["change"], r["arm"], int(r["rep"]), r["role"])
-        if key in cells:
-            fails.append("duplicated row: %s / %s / rep %s / %s"
-                         % (r["change"], r["arm"], r["rep"], r["role"]))
+        key = (r["variant"], r["arm"], int(r["rep"]))
+        if key in by:
+            fails.append("duplicated row: %s / %s / rep %s" % key)
             continue
-        cells[key] = r
+        by[key] = r
 
-    for c in changes:
+    for v in variants:
         for a in arms:
-            for rep in reps:
-                for role in ROLES:
-                    if (c, a, rep, role) not in cells:
-                        fails.append("missing cell: %s / %s / rep %d / %s"
-                                     % (c, a, rep, role))
+            got = [r for r in by.values() if r["variant"] == v and r["arm"] == a]
+            if len(got) < min_reps:
+                fails.append("%s / %s: %d repetition(s), the paper needs at "
+                             "least %d" % (v, a, len(got), min_reps))
+    for a in arms:
+        if not [r for r in by.values()
+                if r["variant"] == BASELINE and r["arm"] == a]:
+            fails.append("no baseline: %s / %s is missing, and without it "
+                         "there is nothing to compare against" % (BASELINE, a))
 
-    for key, r in cells.items():
+    for key, r in by.items():
         if r["verdict"] != "OK":
-            fails.append("%s / %s / rep %s / %s: verdict %s"
-                         % (r["change"], r["arm"], r["rep"], r["role"],
-                            r["verdict"]))
-        for col in ("loadavg", "gpu", "commit"):
+            fails.append("%s / %s / rep %s: verdict %s"
+                         % (r["variant"], r["arm"], r["rep"], r["verdict"]))
+        for col in ("loadavg", "gpu", "commit", "build"):
             if not (r.get(col) or "").strip():
-                fails.append("%s / %s / rep %s / %s: the row does not record %s"
-                             % (r["change"], r["arm"], r["rep"], r["role"], col))
+                fails.append("%s / %s / rep %s: the row does not record %s"
+                             % (r["variant"], r["arm"], r["rep"], col))
         try:
             if float(r["wall_s"]) <= 0:
-                fails.append("%s / %s / rep %s / %s: non-positive wall time"
-                             % (r["change"], r["arm"], r["rep"], r["role"]))
+                fails.append("%s / %s / rep %s: non-positive wall time"
+                             % (r["variant"], r["arm"], r["rep"]))
             if int(r["rss_kb"]) <= 0:
-                fails.append("%s / %s / rep %s / %s: no peak RSS"
-                             % (r["change"], r["arm"], r["rep"], r["role"]))
+                fails.append("%s / %s / rep %s: no peak RSS"
+                             % (r["variant"], r["arm"], r["rep"]))
         except ValueError:
-            fails.append("%s / %s / rep %s / %s: the timing columns are not "
-                         "numbers" % (r["change"], r["arm"], r["rep"], r["role"]))
+            fails.append("%s / %s / rep %s: the timing columns are not numbers"
+                         % (r["variant"], r["arm"], r["rep"]))
 
-    # --- the effect of each change, with its noise ------------------------
-    print("\n| change | arm | before (s) | after (s) | time | peak RSS | memory | verdict |")
+    # --- the effect of each variant, with its noise ------------------------
+    print("\n| variant | switch | arm | baseline (s) | variant (s) | time | "
+          "peak RSS | verdict |")
     print("|---|---|---|---|---|---|---|---|")
-    for c in changes:
+    for v in variants:
+        if v == BASELINE:
+            continue
         for a in arms:
-            bef = [float(cells[(c, a, rep, "before")]["wall_s"])
-                   for rep in reps if (c, a, rep, "before") in cells]
-            aft = [float(cells[(c, a, rep, "after")]["wall_s"])
-                   for rep in reps if (c, a, rep, "after") in cells]
-            if not bef or not aft:
+            base = [float(by[(BASELINE, a, rep)]["wall_s"])
+                    for rep in reps if (BASELINE, a, rep) in by]
+            var = [float(by[(v, a, rep)]["wall_s"])
+                   for rep in reps if (v, a, rep) in by]
+            if not base or not var:
                 continue
-            bm, am = statistics.median(bef), statistics.median(aft)
-            spread = (max(bef) - min(bef)) / bm if bm else 0.0
-            ratio = am / bm if bm else 0.0
-            rb = [int(cells[(c, a, rep, "before")]["rss_kb"]) / 1048576.0
-                  for rep in reps if (c, a, rep, "before") in cells]
-            ra = [int(cells[(c, a, rep, "after")]["rss_kb"]) / 1048576.0
-                  for rep in reps if (c, a, rep, "after") in cells]
-            rmb, rma = statistics.median(rb), statistics.median(ra)
-            # the effect is only a finding if it is bigger than the spread
-            # of the measurements it is computed from
+            bm, vm = statistics.median(base), statistics.median(var)
+            spread = (max(base) - min(base)) / bm if bm else 0.0
+            ratio = vm / bm if bm else 0.0
+            rb = [int(by[(BASELINE, a, rep)]["rss_kb"]) / 1048576.0
+                  for rep in reps if (BASELINE, a, rep) in by]
+            rv = [int(by[(v, a, rep)]["rss_kb"]) / 1048576.0
+                  for rep in reps if (v, a, rep) in by]
+            rbm, rvm = statistics.median(rb), statistics.median(rv)
+            feature = by[(v, a, reps[0])]["feature"] if (v, a, reps[0]) in by else ""
             verdict = ("within noise" if abs(ratio - 1.0) <= spread
-                       else ("faster" if ratio < 1.0 else "slower"))
-            print("| %s | %s | %.2f | %.2f | %.3fx | %.1f -> %.1f GB | %.3fx | %s |"
-                  % (c, a, bm, am, ratio, rmb, rma,
-                     (rma / rmb if rmb else 0.0), verdict))
+                       else ("the switch is worth it" if ratio > 1.0
+                             else "the switch costs time"))
+            print("| %s | %s | %s | %.2f | %.2f | %.3fx | %.1f -> %.1f GB | %s |"
+                  % (v, feature, a, bm, vm, ratio, rbm, rvm, verdict))
     return fails
 
 
@@ -132,23 +134,23 @@ def mutate(src, dst, kind):
                 return r
         raise SystemExit("the mutation %s has no row to act on" % kind)
 
-    if kind == "drop_role":
-        rows = [r for r in rows
-                if not (r["role"] == "after" and r["change"] == rows[0]["change"])]
-    elif kind == "bad_barcode":
-        first(lambda r: r["role"] == "after")["verdict"] = "BADCODEC"
-    elif kind == "flip_verdict":
-        first(lambda r: r["role"] == "before")["verdict"] = "BADCODEC"
+    if kind == "drop_baseline":
+        rows = [r for r in rows if r["variant"] != BASELINE]
+    elif kind == "drop_variant":
+        v = rows[0]["variant"]
+        rows = [r for r in rows if r["variant"] != v]
+    elif kind == "bad_verdict":
+        first(lambda r: True)["verdict"] = "BADCODEC"
     elif kind == "zero_time":
-        first(lambda r: r["role"] == "after")["wall_s"] = "0"
+        first(lambda r: True)["wall_s"] = "0"
     elif kind == "no_rss":
-        first(lambda r: r["role"] == "after")["rss_kb"] = "0"
+        first(lambda r: True)["rss_kb"] = "0"
     elif kind == "no_loadavg":
-        first(lambda r: r["role"] == "after")["loadavg"] = ""
+        first(lambda r: True)["loadavg"] = ""
+    elif kind == "no_provenance":
+        first(lambda r: True)["commit"] = ""
     elif kind == "dup_row":
         rows = rows + [dict(rows[0])]
-    elif kind == "no_provenance":
-        first(lambda r: r["role"] == "after")["commit"] = ""
     else:
         raise SystemExit("unknown mutation %s" % kind)
     with open(dst, "w", newline="") as fh:
@@ -158,8 +160,8 @@ def mutate(src, dst, kind):
             w.writerow(r)
 
 
-MUTATIONS = ["drop_role", "bad_barcode", "flip_verdict", "zero_time",
-             "no_rss", "no_loadavg", "dup_row", "no_provenance"]
+MUTATIONS = ["drop_baseline", "drop_variant", "bad_verdict", "zero_time",
+             "no_rss", "no_loadavg", "no_provenance", "dup_row"]
 
 
 def main() -> int:
@@ -174,9 +176,8 @@ def main() -> int:
         for f in fails[:40]:
             print("  - %s" % f)
         return 1
-    print("\nPASS: every change has a before and an after for every arm and "
-          "repetition, every run reproduced the reference barcode, and every "
-          "row is identified")
+    print("\nPASS: every variant has a baseline and enough repetitions, every "
+          "run reproduced the reference barcode, and every row is identified")
 
     if args.self_test:
         tmp = tempfile.mkdtemp(prefix="ablation_self_")

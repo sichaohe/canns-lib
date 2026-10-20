@@ -1,49 +1,53 @@
 #!/usr/bin/env python3
-"""The unified ablation table: one switch per row, one pass, one protocol.
+"""The unified ablation table: all switches on, against exactly one off.
 
-WHAT THIS IS. The paper's central table is an ablation: for each design
-decision, what did it buy? The measurements for the individual decisions
-exist, but they were taken in different rounds, on different days, with
-different harnesses -- which is not a table a reader can read as a table.
+THE FRAMING, and why it is this one. The paper's central table is an
+ablation. There are two ways to build one, and they are NOT the same
+measurement:
 
-This script measures them ALL AGAIN, in one interleaved pass, with one
-protocol, so that the rows are comparable with each other and not only
-within themselves. For each change it runs the build BEFORE the change and
-the build AFTER it, back to back, on the same arm, in the same repetition.
+  "one switch ON at a time" -- build a variant that has only that change.
+  "all switches ON, one OFF" -- build a variant that is the shipping build
+  with exactly that change reverted.
 
-THE FOUR CHANGES, each with its own before/after pair of builds:
+The second is the right one here, because the changes were not introduced
+as independent commits: the auto-sparse fix and the heap change arrived in
+the same commit, and the column-store rewrite and the host/device hand-off
+touch the same files. A "before" build from that history therefore differs
+from the shipping build by MORE than the change being measured, and the
+numbers would not be comparable with each other.
 
-  auto_sparse        the auto-sparse decision no longer sends a dense
-                     matrix down the sparse path (the ASA pipeline
-                     replaces the +inf pairs with a cap, so the old
-                     `threshold < max_finite` test was true for an
-                     ordinary dense matrix, and the sparse path is 4.3x
-                     slower on identical work).
-  coboundary_heap    the coboundary heap pops with a classic sift-down
-                     instead of `BinaryHeap::pop`.
-  nonempty_bounds    the column store keeps one boundary pair per
-                     NON-EMPTY column instead of one per enumerated
-                     column.
-  zero_copy_handoff  the GPU pre-pass hands the column indices to the
-                     host without copying them twice.
+So this table measures the switches that CAN be turned off independently,
+and it measures them against the shipping build:
+
+  all_on              the shipping build, with every switch on
+  heap_off            the same source, built with the `binary-heap`
+                      feature: the reduction's working heap is
+                      `std::collections::BinaryHeap` again, whose `pop`
+                      walks the hole to the bottom of the tree
+  auto_sparse_off     the same source, built with the `legacy-auto-sparse`
+                      feature: the sparse representation is chosen
+                      whenever the threshold is below the maximum finite
+                      distance, without requiring the matrix to actually
+                      contain a missing pair
+
+Both are pure build flags, so the two variants differ from the shipping
+build by exactly one thing, and the rows are comparable with each other.
+
+The other two changes -- the column store's one boundary pair per
+non-empty column, and the host/device hand-off -- are NOT independently
+switchable in the current tree, and they are measured in their own tables
+(`bounds_ab.csv`, `gpucopy_ab.csv`) as cumulative before/after pairs from
+an earlier base commit. The paper's ablation section has two tables with
+two headers for exactly this reason: the numbers are comparable within a
+row and NOT across the two tables.
 
 THE ARMS. The two input forms x the two thresholds, because the changes
-interact with both: the `+inf` matrix at the real threshold (the dense
-path), the `+inf` matrix at the cap, the capped matrix at the real
-threshold (ripser++'s input -- the arm the sparse false positive used to
-ruin), and the capped matrix at the cap.
+interact with both.
 
 GATES. Every run must print the reference barcode md5 and the bar counts.
 A run that disagrees is recorded as `BADCODEC` and the checker fails the
 whole table: an ablation row that changed the answer is not an ablation
 row, it is a bug.
-
-⚠ EVERY BUILD MUST BE COMPILED WITH THE `gpu` FEATURE. The GPU apparent
-  pre-pass lives behind `#[cfg(feature = "gpu")]` and the feature is not
-  in the default set, so a build without it silently falls back to the
-  CPU pre-pass and is ~35% slower -- which reads exactly like a
-  regression in the change under test. The script refuses to run against
-  a build whose `gpu_err` is not empty.
 
 USAGE
     python unified_ablation.py --out unified_ablation.csv --reps 3
@@ -76,20 +80,17 @@ ARMS = [
     ("cap_CAP", "capped", CAP),
 ]
 
-# The changes, in the order the paper tells them, with the build pair of
-# each. The `before` build is the one WITHOUT the change.
-CHANGES = [
-    ("auto_sparse", "orig", "/home/sichaohe/canns-lib-dev/site_g_orig",
-     "modp", "/home/sichaohe/canns-lib-dev/site_g_modp"),
-    ("coboundary_heap", "heap_off", "/home/sichaohe/canns-lib-dev/site_hp_off",
-     "heap_on", "/home/sichaohe/canns-lib-dev/site_hp_on"),
-    ("nonempty_bounds", "ship", "/home/sichaohe/canns-lib-dev/site_ship",
-     "bounds", "/home/sichaohe/canns-lib-dev/site_bounds"),
-    ("zero_copy_handoff", "ship3", "/home/sichaohe/canns-lib-dev/site_ship3",
-     "ship4", "/home/sichaohe/canns-lib-dev/site_ship4"),
+# The shipping build, and the two variants that differ from it by exactly
+# one cargo feature. The variants are built by
+# `benchmarks/ripser/build_abl_variants.sh`.
+VARIANTS = [
+    ("all_on", "shipping", "/home/sichaohe/canns-lib-dev/site_ship6"),
+    ("heap_off", "binary-heap", "/home/sichaohe/canns-lib-dev/site_abl_heapoff"),
+    ("auto_sparse_off", "legacy-auto-sparse",
+     "/home/sichaohe/canns-lib-dev/site_abl_autosparseoff"),
 ]
 
-FIELDS = ["rep", "change", "arm", "role", "build", "mode", "thresh",
+FIELDS = ["rep", "variant", "feature", "arm", "mode", "thresh", "build",
           "wall_s", "rss_kb", "bars", "md5", "h1top", "gpu_err", "rc",
           "verdict", "loadavg", "gpu", "commit"]
 
@@ -111,9 +112,6 @@ md5 = ":".join(hashlib.md5(np.asarray(sorted(map(tuple, x)), dtype="float64").to
 h1 = np.asarray(r[1], dtype="float64")
 life = np.sort(h1[:, 1] - h1[:, 0])[::-1]
 life = life[np.isfinite(life)]
-# Peak resident set of THIS process, after the computation. The
-# reduction's working structures are the bulk of it, so this is where a
-# change in the column store shows up.
 rss = 0
 for line in open("/proc/self/status"):
     if line.startswith("VmHWM:"):
@@ -128,12 +126,6 @@ print("H1TOP " + ",".join("%.2f" % x for x in life[:3]))
 
 
 def source_commit():
-    """The fingerprint of the source the builds came from.
-
-    The tree on the benchmark host is a copy, not a git checkout, so the
-    commit comes from git when there is one and otherwise from the md5 of
-    the files the build depends on.
-    """
     src = "/home/sichaohe/canns-lib-dev"
     try:
         c = subprocess.run(["git", "-C", src, "rev-parse", "--short", "HEAD"],
@@ -182,71 +174,69 @@ def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--out", default="unified_ablation.csv")
     ap.add_argument("--reps", type=int, default=3)
-    ap.add_argument("--arms", nargs="*", default=None,
-                    help="subset of arm names (default: all four)")
-    ap.add_argument("--changes", nargs="*", default=None,
-                    help="subset of change names (default: all four)")
+    ap.add_argument("--arms", nargs="*", default=None)
+    ap.add_argument("--variants", nargs="*", default=None)
     ap.add_argument("--timeout", type=int, default=900)
     args = ap.parse_args()
 
     arms = [a for a in ARMS if args.arms is None or a[0] in args.arms]
-    changes = [c for c in CHANGES if args.changes is None or c[0] in args.changes]
-    if not arms or not changes:
+    variants = [v for v in VARIANTS
+                if args.variants is None or v[0] in args.variants]
+    if not arms or not variants:
         print("FAIL: nothing selected", file=sys.stderr)
         return 2
 
-    # The device is pinned: the box has two A100s and the second one
-    # belongs to somebody else's job, and a run that landed on a device
-    # another job was saturating would be a measurement of that job.
     dev = os.environ.get("CANNS_BENCH_GPU", "0")
     env = dict(os.environ, CUDA_VISIBLE_DEVICES=dev)
     commit = source_commit()
-    print("device=%s  commit=%s  reps=%d  changes=%s"
-          % (dev, commit, args.reps, [c[0] for c in changes]), flush=True)
+    print("device=%s  commit=%s  reps=%d  variants=%s"
+          % (dev, commit, args.reps, [v[0] for v in variants]), flush=True)
 
     rows = []
     for rep in range(1, args.reps + 1):
-        for change, bname, bpath, aname, apath in changes:
-            for arm, mode, thresh in arms:
-                # before and after, back to back, so the machine state is
-                # as close to the same for the two as it can be
-                for role, bld, path in (("before", bname, bpath),
-                                        ("after", aname, apath)):
-                    t0 = time.time()
-                    r = run(path, thresh, mode, args.timeout, env=env)
-                    rec = {
-                        "rep": rep, "change": change, "arm": arm, "role": role,
-                        "build": bld, "mode": mode, "thresh": thresh,
-                        "wall_s": r.get("WALL", ""),
-                        "rss_kb": r.get("RSS", ""),
-                        "bars": r.get("BARS", ""),
-                        "md5": r.get("MD5", ""),
-                        "h1top": r.get("H1TOP", ""),
-                        "gpu_err": r.get("gpu_err", ""),
-                        "rc": r.get("rc", ""),
-                        "loadavg": open("/proc/loadavg").read().split()[0],
-                        "gpu": dev, "commit": commit,
-                    }
-                    if rec["gpu_err"]:
-                        rec["verdict"] = "NOGPU"
-                    elif rec["md5"] != REF_MD5 or rec["bars"] != REF_BARS:
-                        rec["verdict"] = "BADCODEC"
-                    else:
-                        rec["verdict"] = "OK"
-                    rows.append(rec)
-                    print("rep=%d %-18s %-8s %-6s %-8s wall=%-8s rss=%-9s %s %s"
-                          % (rep, change, arm, role, bld, rec["wall_s"],
-                             rec["rss_kb"], rec["bars"], rec["verdict"]),
-                          flush=True)
+        for arm, mode, thresh in arms:
+            # the shipping build and each variant, back to back, so the
+            # machine state is as close to the same for the two as it can be
+            for name, feature, path in variants:
+                if not os.path.isdir(path):
+                    print("FAIL: the variant's site is missing: %s" % path,
+                          file=sys.stderr)
+                    return 2
+                t0 = time.time()
+                r = run(path, thresh, mode, args.timeout, env=env)
+                rec = {
+                    "rep": rep, "variant": name, "feature": feature,
+                    "arm": arm, "mode": mode, "thresh": thresh,
+                    "build": os.path.basename(path),
+                    "wall_s": r.get("WALL", ""),
+                    "rss_kb": r.get("RSS", ""),
+                    "bars": r.get("BARS", ""),
+                    "md5": r.get("MD5", ""),
+                    "h1top": r.get("H1TOP", ""),
+                    "gpu_err": r.get("gpu_err", ""),
+                    "rc": r.get("rc", ""),
+                    "loadavg": open("/proc/loadavg").read().split()[0],
+                    "gpu": dev, "commit": commit,
+                }
+                if rec["gpu_err"]:
+                    rec["verdict"] = "NOGPU"
+                elif rec["md5"] != REF_MD5 or rec["bars"] != REF_BARS:
+                    rec["verdict"] = "BADCODEC"
+                else:
+                    rec["verdict"] = "OK"
+                rows.append(rec)
+                print("rep=%d %-16s %-8s wall=%-8s rss=%-9s %s %s"
+                      % (rep, name, arm, rec["wall_s"], rec["rss_kb"],
+                         rec["bars"], rec["verdict"]), flush=True)
         write_table(args.out, rows)
 
     write_table(args.out, rows)
-    print("\nwrote %s (%d rows)" % (args.out, len(rows)))
-    bad = sorted({(r["change"], r["arm"], r["build"]) for r in rows
+    bad = sorted({(r["variant"], r["arm"]) for r in rows
                   if r["verdict"] != "OK"})
+    print("\nwrote %s (%d rows)" % (args.out, len(rows)))
     print("runs that did not reproduce the reference barcode: %d" % len(bad))
     for c in bad:
-        print("   %s / %s / %s" % c)
+        print("   %s / %s" % c)
     return 1 if bad else 0
 
 
