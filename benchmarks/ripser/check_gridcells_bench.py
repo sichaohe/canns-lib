@@ -1,0 +1,200 @@
+#!/usr/bin/env python3
+"""Checker for the grid-cells main benchmark (the 485-cell grid).
+
+The corpus's own driver (`~/gridcells/gca_bench.py`) writes one row per
+(matrix, target, input_form) cell. This checker is the gate on that table:
+
+  1. THE GRID IS COMPLETE. The denominator is computed HERE, from the
+     matrix directory and the arm list -- never from the table's own row
+     count. Every cell must appear exactly once, and a cell that is
+     missing is named.
+  2. THE ARMS OF A MATRIX AGREE. The four canns-lib arms (GPU and CPU,
+     the +inf and the capped input) must produce the SAME barcode md5:
+     the input form and the build must not change the answer.
+  3. THE MANIFEST REFERENCE IS REPRODUCED. The corpus's own manifest
+     carries the H1 top-3 lifetimes computed by the dataset authors with
+     canns 1.0.2.dev / canns-lib 0.7.0. Our arms must reproduce them,
+     and ripser++'s arm must produce the same number of bars.
+  4. THE TABLE IS USABLE. Every row carries a positive wall time, a
+     positive peak RSS and the machine's load average (the machine is
+     shared, and a paper's numbers have to say what else was running).
+
+USAGE
+    python check_gridcells_bench.py gca_results_final.csv [--matrix-dir DIR]
+"""
+from __future__ import annotations
+
+import argparse
+import csv
+import os
+import shutil
+import sys
+import tempfile
+
+MATRIX_DIR = "/home/sichaohe/gridcells/matrices"
+ARMS = [("canns-gpu", "inf_preserved"), ("canns-gpu", "capped"),
+        ("canns-cpu", "inf_preserved"), ("canns-cpu", "capped"),
+        ("ripserpp", "capped")]
+
+REQUIRED = ["matrix", "target", "input_form", "wall_s", "peak_rss_kb",
+            "bars_d0", "bars_d1", "h1_top3", "h1_md5", "ref_h1_top3",
+            "loadavg"]
+
+
+def expected_matrices(matrix_dir=MATRIX_DIR):
+    if not os.path.isdir(matrix_dir):
+        return []
+    return sorted(f[:-4] for f in os.listdir(matrix_dir) if f.endswith(".npy"))
+
+
+def check(path, matrix_dir=MATRIX_DIR):
+    """Returns a list of failure strings (empty == PASS)."""
+    fails = []
+    with open(path, newline="") as fh:
+        rows = list(csv.DictReader(fh))
+    if not rows:
+        return ["table is empty: %s" % path]
+    missing_cols = [c for c in REQUIRED if c not in rows[0]]
+    if missing_cols:
+        return ["table is missing columns: %s" % ", ".join(missing_cols)]
+
+    mats = expected_matrices(matrix_dir)
+    if not mats:
+        fails.append("no matrices under %s -- this checker has to run where the "
+                     "corpus is" % matrix_dir)
+    want = len(mats) * len(ARMS)
+    print("expected cells: %d matrices x %d arms = %d" % (len(mats), len(ARMS), want))
+    print("rows in table                    : %d" % len(rows))
+
+    seen = {}
+    for r in rows:
+        key = (r["matrix"], r["target"], r["input_form"])
+        if key in seen:
+            fails.append("duplicated cell: %s / %s / %s" % key)
+        seen[key] = r
+
+    for m in mats:
+        for target, form in ARMS:
+            r = seen.get((m, target, form))
+            if r is None:
+                fails.append("missing cell: %s / %s / %s" % (m, target, form))
+                continue
+            try:
+                if float(r["wall_s"]) <= 0:
+                    fails.append("%s/%s/%s: non-positive wall time" % (m, target, form))
+                if int(r["peak_rss_kb"]) <= 0:
+                    fails.append("%s/%s/%s: no peak RSS" % (m, target, form))
+            except ValueError:
+                fails.append("%s/%s/%s: the timing columns are not numbers"
+                             % (m, target, form))
+            if not (r.get("loadavg") or "").strip():
+                fails.append("%s/%s/%s: no load average recorded (the machine is "
+                             "shared)" % (m, target, form))
+
+    # the arms of a matrix must agree on the barcode
+    by_matrix = {}
+    for r in rows:
+        by_matrix.setdefault(r["matrix"], []).append(r)
+    for m, rs in by_matrix.items():
+        canns = [r for r in rs if r["target"].startswith("canns")]
+        md5s = {r["h1_md5"] for r in canns if r.get("h1_md5")}
+        if len(md5s) > 1:
+            fails.append("%s: the canns-lib arms disagree on the barcode: %s"
+                         % (m, sorted(md5s)))
+        for r in canns:
+            ref = (r.get("ref_h1_top3") or "").strip()
+            got = (r.get("h1_top3") or "").strip()
+            if ref and got and ref != got:
+                fails.append("%s/%s/%s: the H1 top-3 %s does not reproduce the "
+                             "manifest reference %s"
+                             % (m, r["target"], r["input_form"], got, ref))
+        pp = [r for r in rs if r["target"] == "ripserpp"]
+        for r in pp:
+            for arm in canns:
+                if r.get("bars_d1") and arm.get("bars_d1") and \
+                        r["bars_d1"] != arm["bars_d1"]:
+                    fails.append("%s: ripser++ reports %s H1 bars, canns-lib %s"
+                                 % (m, r["bars_d1"], arm["bars_d1"]))
+    return fails
+
+
+def mutate(src, dst, kind):
+    with open(src, newline="") as fh:
+        rows = list(csv.DictReader(fh))
+        fields = list(rows[0].keys())
+    if kind == "drop_cell":
+        rows = rows[:-1]
+    elif kind == "dup_cell":
+        rows = rows + [dict(rows[0])]
+    elif kind == "disagree_arms":
+        for r in rows:
+            if r["target"] == "canns-cpu":
+                r["h1_md5"] = "deadbeef" * 4
+                break
+    elif kind == "break_reference":
+        rows[0]["h1_top3"] = "999.00,888.00,777.00"
+    elif kind == "zero_time":
+        rows[0]["wall_s"] = "0"
+    elif kind == "no_loadavg":
+        rows[0]["loadavg"] = ""
+    elif kind == "bars_disagree":
+        for r in rows:
+            if r["target"] == "ripserpp":
+                r["bars_d1"] = "999"
+                break
+    else:
+        raise SystemExit("unknown mutation %s" % kind)
+    with open(dst, "w", newline="") as fh:
+        w = csv.DictWriter(fh, fieldnames=fields)
+        w.writeheader()
+        for r in rows:
+            w.writerow(r)
+
+
+MUTATIONS = ["drop_cell", "dup_cell", "disagree_arms", "break_reference",
+             "zero_time", "no_loadavg", "bars_disagree"]
+
+
+def main() -> int:
+    ap = argparse.ArgumentParser()
+    ap.add_argument("csv", nargs="?", default="gca_results_final.csv")
+    ap.add_argument("--matrix-dir", default=MATRIX_DIR)
+    ap.add_argument("--self-test", action="store_true")
+    args = ap.parse_args()
+
+    fails = check(args.csv, args.matrix_dir)
+    if fails:
+        print("\nFAIL (%d problems):" % len(fails))
+        for f in fails[:40]:
+            print("  - %s" % f)
+        if len(fails) > 40:
+            print("  ... and %d more" % (len(fails) - 40))
+        return 1
+    print("\nPASS: every cell of the grid is present, the arms agree, and the "
+          "manifest reference is reproduced")
+
+    if args.self_test:
+        tmp = tempfile.mkdtemp(prefix="gcbench_self_")
+        try:
+            bad = 0
+            for kind in MUTATIONS:
+                dst = os.path.join(tmp, "mut_%s.csv" % kind)
+                mutate(args.csv, dst, kind)
+                f = check(dst, args.matrix_dir)
+                if f:
+                    print("  self-test %-18s -> correctly FAILED (%d problem(s))"
+                          % (kind, len(f)))
+                else:
+                    print("  self-test %-18s -> *** NOT DETECTED ***" % kind)
+                    bad += 1
+            if bad:
+                print("\nFAIL: %d mutation(s) slipped through" % bad)
+                return 1
+            print("\nPASS: all %d negative self-tests detected" % len(MUTATIONS))
+        finally:
+            shutil.rmtree(tmp, ignore_errors=True)
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
