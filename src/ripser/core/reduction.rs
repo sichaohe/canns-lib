@@ -1602,7 +1602,9 @@ where
                 .max(1024),
             None => columns_to_reduce.len(),
         };
+        let t_reserve = std::time::Instant::now();
         pivot_column_index.reserve(_reserve);
+        let stat_reserve_s = t_reserve.elapsed().as_secs_f64();
 
         // STREAMREAD / WRITEPROBE -- see report S22.8 and S22.11.
         //
@@ -1672,6 +1674,11 @@ where
         // compute_pairs", which until now has only ever been measured as one
         // number, `total_s`.
         let loop_t0 = std::time::Instant::now();
+        // Everything between the start of compute_pairs and the start of the
+        // chunk loop: the GPU pre-pass, the sharded pivot build, the pivot
+        // map's reservation and the diagnostics. It was never a separate line
+        // in the STATS block, so a cost there was invisible.
+        let stat_pre_loop_s = loop_t0.duration_since(compute_t0).as_secs_f64();
         let pc_before = proc_counters();
         // Close the last unverified assumption: that the 18 s really is
         // 286M iterations of the apparent fast path. Counted, not assumed.
@@ -2401,7 +2408,7 @@ where
                  gpu_pre_s={:.6} densify_s={:.6} sharded_pivot_build_s={:.6} sharded_pivot={} \
                  loop_s={:.3} nonapparent_loop_s={:.3} nonapparent_cols={} \
                  scan_s={:.3} fill_s={:.3} reduce_s={:.3} push_s={:.3} pop_s={:.3} rounds={} heap_max={} redheap_max={} col_rounds_max={} \
-                 bd_pairs={} pivots={} reserve_bound={} \
+                 bd_pairs={} pivots={} reserve_bound={} pre_loop_s={:.6} reserve_s={:.6} \
                  ratio_filter_survives={:.6} gpu_err=\"{}\"",
                 columns_to_reduce.len(),
                 stat_pre_pass,
@@ -2444,6 +2451,8 @@ where
                 // WALKCROSS happened to measure the two key sets disjoint.
                 pivot_column_index.len(),
                 _reserve,
+                stat_pre_loop_s,
+                stat_reserve_s,
                 apparent_pairs_reported as f64 / columns_to_reduce.len().max(1) as f64,
                 gpu_err
             );

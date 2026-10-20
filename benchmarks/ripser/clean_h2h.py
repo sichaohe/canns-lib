@@ -66,6 +66,16 @@ sys.path.insert(0, site)
 from canns_lib.ripser import ripser
 d = np.load("/home/sichaohe/ph_work/ph_dm_1200.npy")
 np.fill_diagonal(d, 0.0)
+# WARM-UP. The FIRST call in a process pays a one-time CUDA context
+# creation plus the PTX module load -- 0.32 s measured -- and ripser++'s
+# equivalent sits OUTSIDE its own "total time:" (its process wall is
+# 10.8 s against an internal 10.34 s). Comparing our FIRST call against
+# ripser++'s internal timer therefore charged us for an initialisation
+# the comparison excluded on the other side. The measured call is
+# therefore the SECOND one, and both numbers are reported.
+t0 = time.perf_counter()
+ripser(d, maxdim=2, thresh=thresh, coeff=47, distance_matrix=True, progress_bar=False)["dgms"]
+cold = time.perf_counter() - t0
 t0 = time.perf_counter()
 r = ripser(d, maxdim=2, thresh=thresh, coeff=47, distance_matrix=True, progress_bar=False)["dgms"]
 wall = time.perf_counter() - t0
@@ -74,6 +84,7 @@ h1 = np.asarray(r[1], dtype="float64")
 life = np.sort(h1[:, 1] - h1[:, 0])[::-1]
 life = life[np.isfinite(life)]
 print("WALL %.3f" % wall)
+print("WALL_COLD %.3f" % cold)
 print("BARS " + "|".join(str(len(x)) for x in r))
 print("MD5 " + md5)
 print("H1TOP " + ",".join("%.2f" % x for x in life[:3]))
@@ -181,6 +192,7 @@ def main() -> int:
                    "build": SITE if who == "ours" else "ripser++ build3"}
             if who == "ours":
                 rec["wall_s"] = r.get("WALL", "")
+                rec["wall_cold_s"] = r.get("WALL_COLD", "")
                 rec["bars"] = r.get("BARS", "")
                 rec["md5"] = r.get("MD5", "")
                 rec["h1top"] = r.get("H1TOP", "")
@@ -226,7 +238,7 @@ def main() -> int:
                   % (rep, who, rec["wall_s"], rec.get("proc_s", ""),
                      rec["bars"], rec["verdict"]), flush=True)
 
-    fields = ["rep", "who", "build", "wall_s", "proc_s", "rss_kb", "bars", "md5", "h1top",
+    fields = ["rep", "who", "build", "wall_s", "wall_cold_s", "proc_s", "rss_kb", "bars", "md5", "h1top",
               "s_dim0", "s_edges", "s_d1_reduce", "s_d2_reduce", "s_d2_assemble",
               "s_d2_pivotbuild", "s_d2_gpupre", "s_d2_scan", "s_hashcopy",
               "s_total", "gpu_err", "verdict"]
