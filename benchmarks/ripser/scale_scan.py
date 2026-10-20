@@ -80,14 +80,31 @@ print("BARS " + json.dumps(bars))
 
 FIELDS = ["n", "side", "threshold", "wall_s", "lib_wall_s", "rss_kb", "bars",
           "bars_d0", "bars_d1", "bars_d2", "error", "note", "loadavg",
-          "threads", "commit", "build_md5"]
+          "gpu", "threads", "commit", "build_md5"]
 
 
+<<<<<<< HEAD
 <<<<<<< HEAD
 def make_instance(n, dim, missing_frac, seed, path):
     """A point cloud with a controlled fraction of missing pairs."""
 =======
 def run_timed(argv, stdout_path, timeout):
+=======
+def gpu_env():
+    """The environment for a run that uses the device.
+
+    The box has two A100s and the second one is busy with somebody else's
+    work, so the device is pinned rather than left to the default: a
+    benchmark that silently landed on a device another job was saturating
+    would be a measurement of that job. The device is recorded in the table
+    as well.
+    """
+    dev = os.environ.get("CANNS_BENCH_GPU", "0")
+    return dict(os.environ, CUDA_VISIBLE_DEVICES=dev), dev
+
+
+def run_timed(argv, stdout_path, timeout, env=None):
+>>>>>>> e7d2dd7 (test(bench): the device is pinned, not inherited)
     """Run with a wall-clock timeout that ACTUALLY fires, and report how the
     program ended.
 
@@ -109,7 +126,7 @@ def run_timed(argv, stdout_path, timeout):
     fo = open(stdout_path, "w")
     fe = open(stdout_path + ".err", "w")
     proc = subprocess.Popen(argv, stdout=fo, stderr=fe, text=True,
-                            start_new_session=True)
+                            start_new_session=True, env=env)
     try:
         proc.communicate(timeout=timeout)
     except subprocess.TimeoutExpired:
@@ -306,8 +323,9 @@ def main() -> int:
     our_md5 = extension_md5(args.site)
     pp_md5 = md5_of(PP)
     threads = len(os.sched_getaffinity(0))
-    print("commit=%s  our_md5=%s  ref_md5=%s  threads=%d"
-          % (commit, our_md5, pp_md5, threads), flush=True)
+    env, dev = gpu_env()
+    print("commit=%s  our_md5=%s  ref_md5=%s  threads=%d  device=%d"
+          % (commit, our_md5, pp_md5, threads, dev), flush=True)
 
     rows = []
     for n in [int(x) for x in args.sizes.split(",") if x.strip()]:
@@ -384,7 +402,7 @@ def main() -> int:
                 t0 = time.perf_counter()
                 try:
                     out_text, err_text, rc = run_timed(argv, out_path,
-                                                        args.timeout)
+                                                        args.timeout, env=env)
                 except subprocess.TimeoutExpired:
                     err = "TIMEOUT"
                     note = "did not finish inside %d s" % args.timeout
@@ -460,6 +478,7 @@ def main() -> int:
                          "bars_d2": per.get(2, per.get("2", "")),
                          "error": err, "note": note,
                          "loadavg": open("/proc/loadavg").read().split()[0],
+                         "gpu": dev,
                          "threads": threads if side == "ours" else "",
                          "commit": commit if side == "ours" else "",
                          "build_md5": (our_md5 if side == "ours" else pp_md5)})

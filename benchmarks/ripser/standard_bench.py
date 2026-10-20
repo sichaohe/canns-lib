@@ -45,6 +45,7 @@ from __future__ import annotations
 
 import argparse
 import csv
+import hashlib
 import json
 import os
 import re
@@ -86,7 +87,7 @@ DATASETS = [
 ]
 
 
-def run_timed(argv, stdout_path, timeout):
+def run_timed(argv, stdout_path, timeout, env=None):
     """Run a command with a wall-clock timeout that ACTUALLY fires.
 
     `/usr/bin/time` is the parent of the program under test, and killing it
@@ -97,7 +98,7 @@ def run_timed(argv, stdout_path, timeout):
     """
     fo = open(stdout_path, "w")
     proc = subprocess.Popen(argv, stdout=fo, stderr=subprocess.PIPE,
-                            text=True, start_new_session=True)
+                            text=True, start_new_session=True, env=env)
     try:
         out, err = proc.communicate(timeout=timeout)
     except subprocess.TimeoutExpired:
@@ -110,6 +111,67 @@ def run_timed(argv, stdout_path, timeout):
         raise
     fo.close()
     return out, err
+
+
+def gpu_env():
+    """The environment for a run that uses the device.
+
+    The box has two A100s and the second one is busy with somebody else's
+    work, so the device is pinned rather than left to the default: a
+    benchmark that silently landed on a device another job was saturating
+    would be a measurement of that job. The device id is recorded in the
+    table as well.
+    """
+    dev = os.environ.get("CANNS_BENCH_GPU", "0")
+    return dict(os.environ, CUDA_VISIBLE_DEVICES=dev), dev
+
+
+def provenance(site):
+    """The identity of the build that produced a row.
+
+    The source tree on the benchmark host is a copy, not a git checkout, so
+    the commit comes from git when there is one and otherwise from the md5
+    of the files the build depends on.
+    """
+    src = "/home/sichaohe/canns-lib-dev"
+    commit = ""
+    try:
+        commit = subprocess.run(["git", "-C", src, "rev-parse", "--short",
+                                 "HEAD"], capture_output=True, text=True,
+                                timeout=20).stdout.strip()
+    except Exception:
+        commit = ""
+    if not commit:
+        h = hashlib.md5()
+        for rel in ("src/ripser/core/reduction.rs", "src/ripser/matrix/sparse.rs",
+                    "src/ripser/core/algorithm.rs", "Cargo.toml"):
+            try:
+                h.update(open(os.path.join(src, rel), "rb").read())
+            except OSError:
+                pass
+        commit = "src:%s" % h.hexdigest()[:12]
+    md5 = ""
+    if os.path.isdir(site):
+        for root, _dirs, names in os.walk(site):
+            for name in sorted(names):
+                if name.endswith(".so"):
+                    try:
+                        md5 = hashlib.md5(
+                            open(os.path.join(root, name), "rb").read()
+                        ).hexdigest()[:16]
+                    except OSError:
+                        md5 = ""
+                    break
+            if md5:
+                break
+    return commit, md5
+
+
+def binary_md5(path):
+    try:
+        return hashlib.md5(open(path, "rb").read()).hexdigest()[:16]
+    except OSError:
+        return ""
 
 
 def load_dataset(path, kind):
@@ -157,9 +219,10 @@ def parse_ripserpp_barcodes(path):
 def run_pp(key, kind, maxdim, args, timeout):
     """ripser++ on one dataset: returns (wall_s, rss_kb, {dim: bars})."""
     src = os.path.join(EXAMPLES, args["file"])
+    env, _dev = gpu_env()
     t0 = time.perf_counter()
     out, err = run_timed(["/usr/bin/time", "-f", "__T__%e %M", PP] + args["pp_args"]
-                         + [src], "/tmp/_stdbench_pp.out", timeout)
+                         + [src], "/tmp/_stdbench_pp.out", timeout, env=env)
     wall = time.perf_counter() - t0
     m = re.search(r"__T__([\d.]+) (\d+)", err)
     rss = int(m.group(2)) if m else 0
@@ -224,11 +287,12 @@ bars = {d: [(float(a), float(b)) for a, b in x] for d, x in enumerate(r)}
 print("WALL %.3f" % wall)
 print("BARS " + json.dumps(bars))
 '''
+    env, _dev = gpu_env()
     t0 = time.perf_counter()
     out, err = run_timed(["/usr/bin/time", "-f", "__T__%e %M", PY, "-c", child,
                           site, src, kind, str(maxdim),
                           "1.4" if key == "o3_4096" else "inf", str(coeff)],
-                         "/tmp/_stdbench_ours.out", timeout)
+                         "/tmp/_stdbench_ours.out", timeout, env=env)
     wall = time.perf_counter() - t0
     m = re.search(r"__T__([\d.]+) (\d+)", err)
     rss = int(m.group(2)) if m else 0
@@ -247,6 +311,29 @@ def compare(a, b):
     """(n_matched, max_rel_dev, unmatched) of bar list a against b."""
     n, dev, ua, ub = match_bars(a, b)
     return n, dev, max(ua, ub)
+
+
+def row_extra(side, prov_gpu, prov_cpu, pp_md5, cpu_md5, threads, dev):
+    """The identity of the build that produced a row.
+
+    Our rows carry the source fingerprint, the md5 of the extension that
+    was loaded, the thread count and the device. The reference rows carry
+    the md5 of the binary that produced them -- the same convention as the
+    scale scan and the head-to-head table.
+    """
+    out = {"loadavg": open("/proc/loadavg").read().split()[0],
+           "gpu": dev, "threads": "", "commit": "", "build_md5": ""}
+    if side == "gpu":
+        out["commit"], out["build_md5"] = prov_gpu
+        out["threads"] = threads
+    elif side == "cpu":
+        out["commit"], out["build_md5"] = prov_cpu
+        out["threads"] = threads
+    elif side == "pp_gpu":
+        out["build_md5"] = pp_md5
+    elif side == "ripser_cpu":
+        out["build_md5"] = cpu_md5
+    return out
 
 
 def main() -> int:
@@ -270,6 +357,15 @@ def main() -> int:
     # An EMPTY filter means "every side"; a set of names means "only these".
     sides = {k.strip() for k in args.sides.split(",") if k.strip()} or {
         "pp_gpu", "gpu", "cpu", "ripser_cpu"}
+
+    prov_gpu = provenance(args.gpu_site)
+    prov_cpu = provenance(args.cpu_site)
+    pp_md5 = binary_md5(PP)
+    cpu_md5 = binary_md5(RIPserCPU)
+    threads = len(os.sched_getaffinity(0))
+    _env, dev = gpu_env()
+    print("device=%d  commit(gpu)=%s  md5(gpu)=%s  md5(cpu)=%s  threads=%d"
+          % (dev, prov_gpu[0], prov_gpu[1], prov_cpu[1], threads), flush=True)
 
     rows = []
     for key, _fname, kind, maxdim, pp_args, exp_file in DATASETS:
@@ -396,6 +492,8 @@ def main() -> int:
                     "max_rel_dev": "%.3e" % max(devs or [0.0]),
                     "verdict": ("SAME_BARCODE" if ok else "BARCODE_MISMATCH")
                                if w is not None else "TIMEOUT",
+                    **row_extra(side, prov_gpu, prov_cpu, pp_md5, cpu_md5,
+                                threads, dev),
                 })
             print("   %-14s %-8s bars=%d match_expected=%s %s"
                   % (key, side, total, m_exp,
@@ -403,7 +501,7 @@ def main() -> int:
 
     fields = ["dataset", "side", "rep", "maxdim", "wall_s", "proc_s", "rss_kb",
               "dims", "bars_total", "match_pp", "match_expected", "max_rel_dev",
-              "verdict"]
+              "verdict", "loadavg", "gpu", "threads", "commit", "build_md5"]
     with open(args.out, "w", newline="") as fh:
         w = csv.DictWriter(fh, fieldnames=fields)
         w.writeheader()
