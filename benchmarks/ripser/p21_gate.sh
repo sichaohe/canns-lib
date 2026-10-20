@@ -5,7 +5,7 @@
 # so NO pair is missing and auto-sparse must never fire. That is exactly what
 # this proves: the switch is inert on dense input. The POSITIVE case (a matrix
 # that really is 30% missing) is the ASA matrix, checked bitwise in
-# sparse_paths.py / p14_asa_gate.py.
+# sparse_paths.py.
 set -u
 export PATH=$HOME/.cargo/bin:/usr/local/cuda/bin:$PATH
 PY=/home/sichaohe/miniconda3/envs/rl/bin/python
