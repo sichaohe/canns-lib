@@ -364,7 +364,7 @@ def main() -> int:
     cpu_md5 = binary_md5(RIPserCPU)
     threads = len(os.sched_getaffinity(0))
     _env, dev = gpu_env()
-    print("device=%d  commit(gpu)=%s  md5(gpu)=%s  md5(cpu)=%s  threads=%d"
+    print("device=%s  commit(gpu)=%s  md5(gpu)=%s  md5(cpu)=%s  threads=%d"
           % (dev, prov_gpu[0], prov_gpu[1], prov_cpu[1], threads), flush=True)
 
     rows = []
