@@ -74,7 +74,7 @@ def load_tables(paths):
     return [merged[k] for k in order], dupes
 
 
-def check(paths, datasets=None, sides=None, min_reps=5):
+def check(paths, datasets=None, sides=None, min_reps=5, max_loadavg=0.0):
     """Returns a list of failure strings (empty == PASS)."""
     datasets = datasets or DATASETS
     sides = sides or SIDES
@@ -162,6 +162,25 @@ def check(paths, datasets=None, sides=None, min_reps=5):
             if timed_out:
                 print("       (%d of %d repetitions timed out)"
                       % (len(timed_out), len(rs)))
+
+    # A table measured while the host was busy is not a measurement of the
+    # code: on this shared machine a neighbour's job changes the numbers by
+    # up to 40% and can flip a comparison's sign. So a table can be asked
+    # to prove it was measured in a quiet window.
+    if max_loadavg > 0:
+        for r in rows:
+            try:
+                la = float(r.get("loadavg") or 0.0)
+            except ValueError:
+                fails.append("the load average column is not a number")
+                break
+            if la >= max_loadavg:
+                fails.append("the load average %s on this row is not below "
+                             "the quiet-window threshold %.2f -- the batch "
+                             "was measured on a busy host"
+                             % (la, max_loadavg))
+                break
+
     return fails
 
 
@@ -230,10 +249,13 @@ def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("csv", nargs="*", default=["standard_bench.csv"])
     ap.add_argument("--min-reps", type=int, default=5)
+    ap.add_argument("--max-loadavg", type=float, default=0.0,
+                    help="fail if any row was measured at or above this load "
+                         "average; 0 = do not check")
     ap.add_argument("--self-test", action="store_true")
     args = ap.parse_args()
 
-    fails = check(args.csv, min_reps=args.min_reps)
+    fails = check(args.csv, min_reps=args.min_reps, max_loadavg=args.max_loadavg)
     print("required cells  : %d datasets x %d compared sides = %d"
           % (len(DATASETS), len(SIDES), len(DATASETS) * len(SIDES)))
     print("required rows   : that x %d repetitions = %d"
@@ -258,7 +280,7 @@ def main() -> int:
             for kind in MUTATIONS:
                 dst = os.path.join(tmp, "mut_%s.csv" % kind)
                 mutate(args.csv[0], dst, kind)
-                f = check(dst, min_reps=args.min_reps)
+                f = check(dst, min_reps=args.min_reps, max_loadavg=args.max_loadavg)
                 if f:
                     print("  self-test %-16s -> correctly FAILED (%d problem(s))"
                           % (kind, len(f)))
