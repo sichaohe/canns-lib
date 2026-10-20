@@ -355,10 +355,13 @@ mod layout_tests {
         // stack carries whatever was there. On the GPU path the padding
         // comes from the device's zeroed allocation, so it is always zero --
         // but nothing reads it, and the kernel does not write it either.
-        assert_eq!(&bytes[0..12], &[
-            3, 7, 0, 0, 0, 0, 0, 0, // (7 << 8) | 3, little endian
-            0, 0, 192, 63, // 1.5f32
-        ]);
+        assert_eq!(
+            &bytes[0..12],
+            &[
+                3, 7, 0, 0, 0, 0, 0, 0, // (7 << 8) | 3, little endian
+                0, 0, 192, 63, // 1.5f32
+            ]
+        );
 
         // And the accessors must round-trip the packed form, because that is
         // what the kernel writes.

@@ -72,7 +72,6 @@ pub fn use_sparse_representation(threshold: f32, max_finite: f32, _has_non_finit
 }
 
 pub fn rips_dm_with_callback_and_interval(
-
     d: &[f32],
     modulus: i32,
     dim_max: i32,
@@ -1260,10 +1259,6 @@ mod sparse_representation_tests {
     /// An infinite `max_finite` makes the first clause vacuous.
     #[test]
     fn infinite_max_finite_stays_dense() {
-        assert!(!use_sparse_representation(
-            200.0,
-            f32::INFINITY,
-            true
-        ));
+        assert!(!use_sparse_representation(200.0, f32::INFINITY, true));
     }
 }

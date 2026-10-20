@@ -1257,8 +1257,7 @@ where
         // behaviour, so the change can be A/B-ed inside ONE batch instead of
         // across batches (the machine is shared and its load moves baselines
         // by 14% between batches).
-        let one_pass_cofacet =
-            env_forced("CANNS_RIPSER_ONE_PASS_COFACET").unwrap_or(true);
+        let one_pass_cofacet = env_forced("CANNS_RIPSER_ONE_PASS_COFACET").unwrap_or(true);
         let modulus = self.modulus; // local copy for closure
 
         // Apparent-pairs optimization: a column that is the birth side of a
@@ -2012,7 +2011,11 @@ where
                             working_coboundary.push(*c);
                         }
                     } else {
-                        self.fill_coboundary_heap(column_to_reduce_entry, dim, &mut working_coboundary);
+                        self.fill_coboundary_heap(
+                            column_to_reduce_entry,
+                            dim,
+                            &mut working_coboundary,
+                        );
                     }
                     walk_stats::note_heap_fill(working_coboundary.len());
                     let p = self.get_pivot(&mut working_coboundary);
@@ -2396,7 +2399,11 @@ where
         let apparent_pairs_reported = if use_gpu_pre {
             match apparent_table.as_ref() {
                 Some(t) => t.present_count(),
-                None => gpu_pre.as_slice().iter().filter(|c| c.get_index() != -1).count(),
+                None => gpu_pre
+                    .as_slice()
+                    .iter()
+                    .filter(|c| c.get_index() != -1)
+                    .count(),
             }
         } else {
             stat_apparent as usize

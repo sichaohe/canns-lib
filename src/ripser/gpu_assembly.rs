@@ -526,9 +526,7 @@ mod tests {
     fn radix_key_fits_accepts_the_asa_scale_bound() {
         // C(1200, 3) -- the number of columns at dim 2 for n = 1200, which is
         // the `visits` count the assembly kernel reports.
-        let c = |n: u64, k: u64| -> u64 {
-            (1..=k).fold(1u64, |acc, i| acc * (n - k + i) / i)
-        };
+        let c = |n: u64, k: u64| -> u64 { (1..=k).fold(1u64, |acc, i| acc * (n - k + i) / i) };
         let bound = c(1200, 3);
         assert_eq!(bound, 287_280_400);
         assert!(radix_key_fits(bound));

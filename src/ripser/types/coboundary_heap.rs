@@ -30,7 +30,9 @@ pub struct CoboundaryHeap {
 impl CoboundaryHeap {
     #[inline(always)]
     pub fn with_capacity(n: usize) -> Self {
-        Self { data: Vec::with_capacity(n) }
+        Self {
+            data: Vec::with_capacity(n),
+        }
     }
 
     #[inline(always)]

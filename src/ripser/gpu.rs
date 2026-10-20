@@ -406,17 +406,10 @@ mod imp {
         // SAFETY: the buffer holds `len` records and the device slice has
         // exactly `len` records.
         unsafe {
-            let dst = std::slice::from_raw_parts_mut(
-                p_rec.as_ptr() as *mut i64,
-                len * 2,
-            );
+            let dst = std::slice::from_raw_parts_mut(p_rec.as_ptr() as *mut i64, len * 2);
             memcpy_dtoh_sync(dst, *o_rec.device_ptr()).map_err(|e| e.to_string())?;
-            let dst_f = std::slice::from_raw_parts_mut(
-                p_flags.as_ptr() as *mut u64,
-                flag_words,
-            );
-            memcpy_dtoh_sync(dst_f, *o_flags.device_ptr())
-                .map_err(|e| e.to_string())?;
+            let dst_f = std::slice::from_raw_parts_mut(p_flags.as_ptr() as *mut u64, flag_words);
+            memcpy_dtoh_sync(dst_f, *o_flags.device_ptr()).map_err(|e| e.to_string())?;
         }
         #[cfg(any(feature = "apparent-stats", feature = "gpu-phase-stats"))]
         stamp(&mut t_read);
@@ -608,7 +601,11 @@ impl ApparentRecords {
     /// An empty population (the CPU path's counterpart, and the state before
     /// the GPU pre-pass has run).
     pub fn empty() -> Self {
-        Self { buf: None, flags: None, n: 0 }
+        Self {
+            buf: None,
+            flags: None,
+            n: 0,
+        }
     }
     /// Is this column an apparent pair (it never reduces)?
     #[inline]
@@ -625,8 +622,7 @@ impl ApparentRecords {
         match &self.flags {
             None => false,
             Some(f) => {
-                let words =
-                    unsafe { f.as_slice::<u64>((self.n + 31) / 32) };
+                let words = unsafe { f.as_slice::<u64>((self.n + 31) / 32) };
                 let w = i >> 5;
                 let b = ((i & 31) * 2) as u32 + which;
                 (words[w] >> b) & 1 == 1
@@ -647,19 +643,11 @@ impl ApparentRecords {
         match &self.buf {
             None => &[],
             Some(b) => {
-                debug_assert_eq!(
-                    std::mem::size_of::<DiameterEntryT>() * self.n,
-                    b.len()
-                );
+                debug_assert_eq!(std::mem::size_of::<DiameterEntryT>() * self.n, b.len());
                 // SAFETY: the buffer holds `n` `DiameterEntryT` records and
                 // was filled by an exact-length copy. The kernel writes the
                 // same 16-byte layout (see `ApparentRec` in the .cu).
-                unsafe {
-                    std::slice::from_raw_parts(
-                        b.as_ptr() as *const DiameterEntryT,
-                        self.n,
-                    )
-                }
+                unsafe { std::slice::from_raw_parts(b.as_ptr() as *const DiameterEntryT, self.n) }
             }
         }
     }
@@ -671,7 +659,8 @@ impl ApparentRecords {
 /// be resolved the same way rather than through `extern "C"` (which fails at
 /// LINK time even though the symbol is in the process).
 #[cfg(feature = "gpu")]
-pub fn pinned_alloc(len: usize) -> Result<PinnedBuf, String> {    type HostAllocFn = unsafe extern "C" fn(
+pub fn pinned_alloc(len: usize) -> Result<PinnedBuf, String> {
+    type HostAllocFn = unsafe extern "C" fn(
         *mut *mut std::os::raw::c_void,
         usize,
         u32,
