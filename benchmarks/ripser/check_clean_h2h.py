@@ -107,7 +107,11 @@ def check(path, expect_ratio_max=None, verbose=True):
 
     # -- rule 1b: the provenance of the measurement -------------------------
     for i, r in enumerate(rows):
-        for col in PROVENANCE_COLUMNS:
+        # The provenance is a property of the build UNDER TEST, so it is
+        # required for our rows; the reference side is a fixed binary and
+        # only has to say which one.
+        cols = PROVENANCE_COLUMNS if r.get("who") == "ours" else ("build",)
+        for col in cols:
             if not (r.get(col) or "").strip():
                 errs.append("row %d (rep=%s who=%s): %s is empty -- a benchmark "
                             "row has to say which commit and which binary it "
@@ -253,8 +257,10 @@ def main() -> int:
         return 2
 
     print("CHECK %s" % args.csv_path)
-    print("  expected cells: %d (%d reps x %d implementations)"
-          % (len(rows), len(reps), len(EXPECTED_WHO)))
+    _rows = read_rows(args.csv_path)
+    _reps = sorted({int(r.get("rep") or 0) for r in _rows})
+    print("  cells: %d rows (%d reps x %d implementations); the minimum is %d reps"
+          % (len(_rows), len(_reps), len(EXPECTED_WHO), MIN_REPS))
     errs = check(args.csv_path, args.expect_ratio_max)
     if not args.no_self_test:
         errs += negative_self_test(args.csv_path)

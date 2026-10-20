@@ -46,6 +46,7 @@ ASA_NPY = "/home/sichaohe/ph_work/ph_dm_1200.npy"
 PP_TXT = "/tmp/asa1200_full.txt"
 RP = "/home/sichaohe/ph_work/ripserpp/ripserplusplus/build3/ripser++"
 PROVENANCE = {}
+THREADS = 0
 # The build under test. ⚠ It MUST be compiled with the `gpu` feature: the GPU
 # apparent pre-pass lives behind `#[cfg(feature = "gpu")]`, the feature is in
 # neither `default` nor `[tool.maturin] features`, and a build without it
@@ -87,11 +88,11 @@ life = np.sort(h1[:, 1] - h1[:, 0])[::-1]
 life = life[np.isfinite(life)]
 print("WALL %.3f" % wall)
 print("WALL_COLD %.3f" % cold)
-try:
-    import rayon
-    print("THREADS %d" % rayon.current_num_threads())
-except Exception:
-    print("THREADS 1")
+# The extension is a compiled module, so the Python `rayon` package is not
+# importable and the worker count is not queryable from Python. The PARENT
+# records the process's CPU affinity instead (it is the child's too); the
+# child must not guess, because a wrong "1" in a provenance column is worse
+# than no column at all.
 print("LOADAVG %s" % open("/proc/loadavg").read().split()[0])
 print("BARS " + "|".join(str(len(x)) for x in r))
 print("MD5 " + md5)
@@ -109,29 +110,50 @@ def parse_kv(line: str) -> dict:
 
 
 def provenance(site):
-    """What exactly was measured: the commit of the source tree and the md5
-    of the built extension.
+    """What exactly was measured: the source fingerprint and the md5 of the
+    built extension.
 
     A benchmark table without the build's identity is not reproducible, and
     the machine is shared -- so the load average travels with every row too.
+
+    The source tree on the benchmark host is a copy, not a git checkout, so
+    the commit is taken from git when there is one and otherwise the
+    fingerprint is the md5 of the files the build actually depends on. The
+    extension is inside the package directory, so the search is recursive.
     """
     out = {}
     src = "/home/sichaohe/canns-lib-dev"
+    commit = ""
     try:
-        out["commit"] = subprocess.run(
+        commit = subprocess.run(
             ["git", "-C", src, "rev-parse", "--short", "HEAD"],
             capture_output=True, text=True, timeout=20).stdout.strip()
     except Exception:
-        out["commit"] = ""
-    md5 = ""
-    for name in sorted(os.listdir(site)) if os.path.isdir(site) else []:
-        if name.endswith(".so"):
-            p = os.path.join(site, name)
+        commit = ""
+    if not commit:
+        h = hashlib.md5()
+        for rel in ("src/ripser/core/reduction.rs", "src/ripser/matrix/sparse.rs",
+                    "src/ripser/core/algorithm.rs", "Cargo.toml"):
             try:
-                md5 = hashlib.md5(open(p, "rb").read()).hexdigest()[:16]
-                break
+                h.update(open(os.path.join(src, rel), "rb").read())
             except OSError:
                 pass
+        commit = "src:%s" % h.hexdigest()[:12]
+    out["commit"] = commit
+    md5 = ""
+    if os.path.isdir(site):
+        for root, _dirs, names in os.walk(site):
+            for name in sorted(names):
+                if name.endswith(".so"):
+                    try:
+                        md5 = hashlib.md5(
+                            open(os.path.join(root, name), "rb").read()
+                        ).hexdigest()[:16]
+                    except OSError:
+                        md5 = ""
+                    break
+            if md5:
+                break
     out["build_md5"] = md5
     return out
 
@@ -218,7 +240,11 @@ def main() -> int:
     ap.add_argument("--timeout", type=int, default=900)
     args = ap.parse_args()
 
-    global PROVENANCE
+    global PROVENANCE, THREADS
+    try:
+        THREADS = len(os.sched_getaffinity(0))
+    except Exception:
+        THREADS = 0
     PROVENANCE = provenance(SITE)
     print("measured build: commit %s  md5 %s" % (PROVENANCE.get("commit"),
                                                  PROVENANCE.get("build_md5")),
@@ -234,7 +260,7 @@ def main() -> int:
             if who == "ours":
                 rec["wall_s"] = r.get("WALL", "")
                 rec["wall_cold_s"] = r.get("WALL_COLD", "")
-                rec["threads"] = r.get("THREADS", "")
+                rec["threads"] = THREADS
                 rec["loadavg"] = r.get("LOADAVG", "")
                 rec["commit"] = PROVENANCE.get("commit", "")
                 rec["build_md5"] = PROVENANCE.get("build_md5", "")

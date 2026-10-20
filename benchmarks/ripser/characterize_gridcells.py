@@ -32,6 +32,7 @@ from __future__ import annotations
 
 import argparse
 import csv
+import hashlib
 import os
 import re
 import subprocess
@@ -57,7 +58,35 @@ r = ripser(d, maxdim=maxdim, thresh=float("inf"), coeff=coeff,
 wall = time.perf_counter() - t0
 print("WALL %.4f" % wall)
 print("BARS " + "|".join(str(len(x)) for x in r))
+try:
+    import rayon
+    print("THREADS %d" % rayon.current_num_threads())
+except Exception:
+    print("THREADS 1")
+print("LOADAVG %s" % open("/proc/loadavg").read().split()[0])
 '''
+
+
+def provenance(site):
+    """The commit of the source tree and the md5 of the built extension."""
+    out = ("", "")
+    src = "/home/sichaohe/canns-lib-dev"
+    try:
+        commit = subprocess.run(["git", "-C", src, "rev-parse", "--short", "HEAD"],
+                                capture_output=True, text=True, timeout=20).stdout.strip()
+    except Exception:
+        commit = ""
+    md5 = ""
+    if os.path.isdir(site):
+        for name in sorted(os.listdir(site)):
+            if name.endswith(".so"):
+                try:
+                    md5 = hashlib.md5(open(os.path.join(site, name), "rb").read()
+                                      ).hexdigest()[:16]
+                except OSError:
+                    pass
+                break
+    return commit, md5
 
 
 def parse_stats(stderr):
@@ -121,6 +150,15 @@ def main() -> int:
                                env=env, timeout=3600)
             wall = time.perf_counter() - t0
         st = parse_stats(p.stderr)
+        child_wall = ""
+        for line in open("/tmp/_char.out"):
+            if line.startswith("WALL "):
+                child_wall = line.split()[1]
+        threads = ""
+        for line in p.stderr.splitlines():
+            if line.startswith("THREADS "):
+                threads = line.split()[1]
+        commit, build_md5 = provenance(args.site)
         d1 = st.get("dim1", {})
         d2 = st.get("dim2", {})
         ph = st.get("phase", {})
@@ -149,9 +187,13 @@ def main() -> int:
             "ph_wall_s": ph.get("wall", ""),
             "ph_reduce_s": ph.get("reduce", ""),
             "ph_assemble_s": ph.get("assemble", ""),
-            "wall_s": "%.4f" % wall,
+            "wall_s": child_wall,
+            "proc_s": "%.4f" % wall,
             "rss_kb": m1.group(2) if m1 else "",
             "loadavg": open("/proc/loadavg").read().split()[0],
+            "threads": threads,
+            "commit": commit,
+            "build_md5": build_md5,
         }
         rows.append(row)
         print("[%d/%d] %-46s inf=%.3f d1_appr=%s d2_appr=%s wall=%.2fs"
@@ -166,7 +208,8 @@ def main() -> int:
               "dim2_loop_s", "dim2_total_s", "dim2_gpu_pre_s",
               "dim2_pivot_build_s",
               "ph_wall_s", "ph_reduce_s", "ph_assemble_s",
-              "wall_s", "rss_kb", "loadavg"]
+              "wall_s", "proc_s", "rss_kb", "loadavg",
+              "threads", "commit", "build_md5"]
     with open(args.out, "w", newline="") as fh:
         w = csv.DictWriter(fh, fieldnames=fields)
         w.writeheader()

@@ -40,6 +40,7 @@ import json
 import hashlib
 import os
 import re
+import signal
 import subprocess
 import sys
 import time
@@ -70,6 +71,43 @@ print("BARS " + json.dumps({str(d): [list(map(float, b)) for b in x]
 '''
 
 
+def run_timed(argv, stdout_path, timeout):
+    """Run with a wall-clock timeout that ACTUALLY fires.
+
+    `/usr/bin/time` is the parent of the program under test, so killing it
+    leaves the program running as an orphan holding the stderr pipe open,
+    and `subprocess.run(timeout=...)` then waits forever on the pipe. The
+    child goes into its own process group and the GROUP is killed.
+    """
+    fo = open(stdout_path, "w")
+    proc = subprocess.Popen(argv, stdout=fo, stderr=subprocess.PIPE,
+                            text=True, start_new_session=True)
+    try:
+        out, err = proc.communicate(timeout=timeout)
+    except subprocess.TimeoutExpired:
+        try:
+            os.killpg(os.getpgid(proc.pid), signal.SIGKILL)
+        except (ProcessLookupError, PermissionError):
+            pass
+        proc.communicate()
+        fo.close()
+        raise
+    fo.close()
+    return out, err
+
+
+def write_table(path, rows):
+    """Write the table. Called after every size, so an interrupted run keeps
+    what it has already measured."""
+    fields = ["n", "side", "wall_s", "rss_kb", "gpu_free_mib_before", "bars",
+              "md5", "error", "note", "loadavg"]
+    with open(path, "w", newline="") as fh:
+        w = csv.DictWriter(fh, fieldnames=fields)
+        w.writeheader()
+        for r in rows:
+            w.writerow(r)
+
+
 def make_instance(n, dim, missing_frac, seed, path):
     """A point cloud with a controlled fraction of missing pairs."""
     rng = np.random.default_rng(seed)
@@ -83,7 +121,10 @@ def make_instance(n, dim, missing_frac, seed, path):
         keep = rng.random(iu[0].size) >= missing_frac
         mask = np.ones((n, n), dtype=bool)
         mask[iu[0][~keep], iu[1][~keep]] = False
-        mask = mask | mask.T
+        # AND, not OR: a pair is present only if BOTH directions were kept,
+        # so the symmetric copy of a removed pair is removed as well. With OR
+        # the mask undoes its own removal and the instance comes out dense.
+        mask = mask & mask.T
         d = np.where(mask, d, np.inf)
     np.save(path, d)
     return d
@@ -108,6 +149,9 @@ def main() -> int:
     ap.add_argument("--maxdim", type=int, default=2)
     ap.add_argument("--coeff", type=int, default=47)
     ap.add_argument("--reps", type=int, default=2)
+    ap.add_argument("--timeout", type=int, default=3600,
+                    help="per-run wall-clock limit; a run that hits it is "
+                         "recorded as a TIMEOUT, which is a result")
     ap.add_argument("--out", default="scale_scan.csv")
     args = ap.parse_args()
 
@@ -128,19 +172,18 @@ def main() -> int:
         np.savetxt(txt, np.where(fin, d, float(d[fin].max()) * 2 + 1.0),
                    fmt="%.10g")
         txt_write = time.perf_counter() - t0
-        pp_best, pp_rss, pp_bars, pp_err = None, 0, None, ""
+        pp_best, pp_rss, pp_bars, pp_err, pp_note = None, 0, None, "", ""
         for rep in range(args.reps):
             free0 = gpu_free_mib()
             try:
-                with open("/tmp/_scale_pp.out", "w") as fo:
-                    t0 = time.perf_counter()
-                    p = subprocess.run(["/usr/bin/time", "-f", "__T__%e %M", PP,
-                                        "--format", "distance", "--dim",
-                                        str(args.maxdim), "--threshold", "inf",
-                                        "--ratio", "1.0", txt],
-                                       stdout=fo, stderr=subprocess.PIPE,
-                                       text=True, timeout=3600)
-                    wall = time.perf_counter() - t0
+                t0 = time.perf_counter()
+                _o, perr = run_timed(["/usr/bin/time", "-f", "__T__%e %M", PP,
+                                       "--format", "distance", "--dim",
+                                       str(args.maxdim), "--threshold", "inf",
+                                       "--ratio", "1.0", txt],
+                                      "/tmp/_scale_pp.out", args.timeout)
+                wall = time.perf_counter() - t0
+                p = type("P", (), {"stderr": perr})()
                 m = re.search(r"__T__([\d.]+) (\d+)", p.stderr)
                 rss = int(m.group(2)) if m else 0
                 if pp_best is None or wall < pp_best:
@@ -149,11 +192,25 @@ def main() -> int:
                               if ln.startswith(" ["))
                 if "CUDA error" in p.stderr or "out of memory" in p.stderr.lower():
                     pp_err = "GPU_OOM"
+                # ripser++ RECALCULATES the dimension when the device cannot
+                # hold the structures: "recalculated dim_max based on GPU free
+                # DRAM capacity: 1" means it gave up on dim 2 on the GPU and
+                # falls back to the host. That is the result at this size.
+                mdim = re.search(r"recalculated dim_max based on GPU free DRAM "
+                                 r"capacity: (\d+)", p.stderr)
+                if mdim:
+                    pp_note = "dim_max recalculated to %s" % mdim.group(1)
+                mgm = re.search(r"gpu memory needed for full rips by calculation "
+                                r"in bytes for dim: \d+: (\d+)", p.stderr)
+                if mgm:
+                    pp_note += (pp_note + "; " if pp_note else "") + \
+                        "needs %.0f GB of device memory" % (int(mgm.group(1)) / 1e9)
             except subprocess.TimeoutExpired:
                 pp_err = "TIMEOUT"
-        print("  ripser++: %s  rss=%s MB  bars=%s %s"
+                pp_note = "did not finish inside %d s" % args.timeout
+        print("  ripser++: %s  rss=%s MB  bars=%s %s %s"
               % ("%.3f s" % pp_best if pp_best else "FAILED",
-                 pp_rss // 1024, pp_bars, pp_err), flush=True)
+                 pp_rss // 1024, pp_bars, pp_err, pp_note), flush=True)
         rows.append({"n": n, "side": "ripserpp", "wall_s": pp_best or "",
                      "rss_kb": pp_rss, "gpu_free_mib_before": free0,
                      "bars": pp_bars or "", "md5": "", "error": pp_err,
@@ -189,18 +246,13 @@ def main() -> int:
             rows.append({"n": n, "side": "ours_" + form, "wall_s": best or "",
                          "rss_kb": rss, "gpu_free_mib_before": -1,
                          "bars": sum(len(v) for v in (bars or {}).values()),
-                         "md5": md5, "error": "",
+                         "md5": md5, "error": "", "note": "",
                          "loadavg": open("/proc/loadavg").read().split()[0]})
         os.unlink(path)
         os.unlink(txt)
+        write_table(args.out, rows)
 
-    fields = ["n", "side", "wall_s", "rss_kb", "gpu_free_mib_before", "bars",
-              "md5", "error", "loadavg"]
-    with open(args.out, "w", newline="") as fh:
-        w = csv.DictWriter(fh, fieldnames=fields)
-        w.writeheader()
-        for r in rows:
-            w.writerow(r)
+    write_table(args.out, rows)
     print("\nwrote %s (%d rows)" % (args.out, len(rows)))
     return 0
 
