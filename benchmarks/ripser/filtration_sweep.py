@@ -71,17 +71,24 @@ np.fill_diagonal(d, 0.0)
 if mode == "capped":
     cap = float(d[np.isfinite(d)].max()) * 2 + 1.0
     d = np.where(np.isfinite(d), d, cap)
+# WARM-UP: the first call in a process pays the one-time CUDA context
+# creation (0.32 s), which ripser++'s internal timer excludes. See the
+# comment in clean_h2h.py.
+t0 = time.perf_counter()
+ripser(d, maxdim=2, thresh=thresh, coeff=47, distance_matrix=True, progress_bar=False)["dgms"]
+cold = time.perf_counter() - t0
 t0 = time.perf_counter()
 r = ripser(d, maxdim=2, thresh=thresh, coeff=47, distance_matrix=True, progress_bar=False)["dgms"]
 wall = time.perf_counter() - t0
 md5 = ":".join(hashlib.md5(np.asarray(sorted(map(tuple, x)), dtype="float64").tobytes()).hexdigest() for x in r)
 print("WALL %.3f" % wall)
+print("WALL_COLD %.3f" % cold)
 print("BARS " + "|".join(str(len(x)) for x in r))
 print("MD5 " + md5)
 '''
 
 FIELDS = ["rep", "side", "build", "arm", "filtration", "input_form", "thresh",
-          "wall_s", "proc_s", "bars", "md5", "verdict"]
+          "wall_s", "wall_cold_s", "proc_s", "bars", "md5", "verdict"]
 
 
 def run_ours(mode, thresh, timeout=900):
@@ -134,6 +141,7 @@ def main() -> int:
                          "arm": arm, "filtration": pp_arm,
                          "input_form": mode, "thresh": thresh,
                          "wall_s": r.get("WALL", ""), "proc_s": r.get("PROC", ""),
+                         "wall_cold_s": r.get("WALL_COLD", ""),
                          "bars": r.get("BARS", ""),
                          "md5": r.get("MD5", ""), "verdict": verdict})
             print("rep=%d ours %-8s %.3f %s" % (rep, arm, float(r.get("WALL", 0)), verdict), flush=True)

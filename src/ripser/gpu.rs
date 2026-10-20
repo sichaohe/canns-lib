@@ -249,7 +249,7 @@ mod imp {
         n: IndexT,
         n_max: usize,
         binomial: &[IndexT],
-        cols: &[IndexT],
+        cols: Vec<IndexT>,
         dim: IndexT,
         threshold: ValueT,
         modulus: CoefficientT,
@@ -304,6 +304,8 @@ mod imp {
         let (dev, _) = device().map_err(|e| e)?;
         let n_cols = cols.len() as i64;
         #[cfg(any(feature = "apparent-stats", feature = "gpu-phase-stats"))]
+        let t_dev = std::time::Instant::now();
+        #[cfg(any(feature = "apparent-stats", feature = "gpu-phase-stats"))]
         let t0 = std::time::Instant::now();
 
         let d_dev = dev.htod_copy(dense.to_vec()).map_err(|e| e.to_string())?;
@@ -318,7 +320,14 @@ mod imp {
         // versus ~1.0 s pageable. Pinning only pays for REPEATED transfers over
         // a buffer that is reused; a one-shot upload of a freshly built array
         // cannot amortise the allocation.
-        let c_dev = dev.htod_copy(cols.to_vec()).map_err(|e| e.to_string())?;
+        #[cfg(any(feature = "apparent-stats", feature = "gpu-phase-stats"))]
+        let t_cols_upload = std::time::Instant::now();
+        // The Vec is MOVED into the device slice: cudarc keeps it as the
+        // slice's host buffer and transfers from it in place. The old
+        // `cols.to_vec()` copied all 807 MB first -- 0.23 s of pure memcpy
+        // for a buffer the driver was going to read anyway.
+        let n_cols_host = cols.len();
+        let c_dev = dev.htod_copy(cols).map_err(|e| e.to_string())?;
         #[cfg(any(feature = "apparent-stats", feature = "gpu-phase-stats"))]
         stamp(&mut t_upload);
 
@@ -329,15 +338,15 @@ mod imp {
         // allocator only accepts the POD types it knows, and the 16-byte
         // record is exactly two of them. The byte layout is unchanged.
         let mut o_rec = dev
-            .alloc_zeros::<i64>(cols.len() * 2)
+            .alloc_zeros::<i64>(n_cols_host * 2)
             .map_err(|e| e.to_string())?;
         // Two bits per column: is-apparent and produces-a-bar.
-        let flag_words = (cols.len() + 31) / 32;
+        let flag_words = (n_cols_host + 31) / 32;
         let mut o_flags = dev
             .alloc_zeros::<u64>(flag_words)
             .map_err(|e| e.to_string())?;
 
-        let grid = ((cols.len() + 255) / 256).min(8192) as u32;
+        let grid = ((n_cols_host + 255) / 256).min(8192) as u32;
         let cfg = LaunchConfig {
             grid_dim: (grid, 1, 1),
             block_dim: (256, 1, 1),
@@ -371,7 +380,7 @@ mod imp {
         #[cfg(any(feature = "apparent-stats", feature = "gpu-phase-stats"))]
         stamp(&mut t_kernel);
 
-        let len = cols.len();
+        let len = n_cols_host;
         // NEGATIVE RESULT: collapsing these three arrays into ONE 16-byte
         // record per column (same size as DiameterEntryT, so it could be
         // reinterpreted with no conversion pass) measured SLOWER: 5.97 s ->
@@ -416,28 +425,15 @@ mod imp {
         {
             stamp(&mut t_build);
             eprintln!(
-                "GPUPHASE cols={len} upload={:.3} alloc={:.3} kernel={:.3}                  pin_read={:.3} build={:.3} total={:.3}",
+                "GPUPHASE cols={len} dev={:.3} upload={:.3} alloc={:.3} kernel={:.3}                  pin_read={:.3} build={:.3} total={:.3} cols_htod={:.3}",
+                t_dev.duration_since(t0).as_secs_f64(),
                 t_upload.unwrap().duration_since(t0).as_secs_f64(),
                 t_alloc.unwrap().duration_since(t_upload.unwrap()).as_secs_f64(),
                 t_kernel.unwrap().duration_since(t_alloc.unwrap()).as_secs_f64(),
                 t_read.unwrap().duration_since(t_kernel.unwrap()).as_secs_f64(),
                 t_build.unwrap().duration_since(t_read.unwrap()).as_secs_f64(),
                 t_build.unwrap().duration_since(t0).as_secs_f64(),
-            );
-        }
-        // NO host-side build. The page-locked buffer already holds the
-        // records, in the consumer's own type, and it is handed over as-is.
-        #[cfg(any(feature = "apparent-stats", feature = "gpu-phase-stats"))]
-        {
-            stamp(&mut t_build);
-            eprintln!(
-                "GPUPHASE cols={len} upload={:.3} alloc={:.3} kernel={:.3}                  pin_read={:.3} build={:.3} total={:.3}",
-                t_upload.unwrap().duration_since(t0).as_secs_f64(),
-                t_alloc.unwrap().duration_since(t_upload.unwrap()).as_secs_f64(),
-                t_kernel.unwrap().duration_since(t_alloc.unwrap()).as_secs_f64(),
-                t_read.unwrap().duration_since(t_kernel.unwrap()).as_secs_f64(),
-                t_build.unwrap().duration_since(t_read.unwrap()).as_secs_f64(),
-                t_build.unwrap().duration_since(t0).as_secs_f64(),
+                t_cols_upload.duration_since(t0).as_secs_f64(),
             );
         }
         Ok(ApparentRecords {
@@ -465,7 +461,7 @@ mod imp {
         _n: IndexT,
         _n_max: usize,
         _binomial: &[IndexT],
-        _cols: &[IndexT],
+        _cols: Vec<IndexT>,
         _dim: IndexT,
         _threshold: ValueT,
         _modulus: CoefficientT,
@@ -513,13 +509,25 @@ pub fn detect(
     modulus: CoefficientT,
     ratio: f32,
 ) -> Result<ApparentRecords, String> {
+    // The kernel needs the simplex index of every column, and the host
+    // holds it inside 16-byte records. Gathering the indices out of them
+    // costs 2.4 GB of memory traffic (1.61 GB read + 807 MB written) -- a
+    // SERIAL gather of 100.9M elements took 0.25 s, more than the PCIe
+    // transfer it fed (0.077 s). A parallel gather reads the same bytes with
+    // more memory-level parallelism, which is the point of the copy.
+    #[cfg(feature = "parallel")]
+    let idx: Vec<IndexT> = {
+        use rayon::prelude::*;
+        cols.par_iter().map(|c| c.get_index()).collect()
+    };
+    #[cfg(not(feature = "parallel"))]
     let idx: Vec<IndexT> = cols.iter().map(|c| c.get_index()).collect();
     imp::detect(
         dense,
         n,
         binomial.n_max(),
         binomial.as_slice(),
-        &idx,
+        idx,
         dim,
         threshold,
         modulus,
