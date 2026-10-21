@@ -109,6 +109,12 @@ def run_measured(argv, env=None, timeout=1800, cwd=None, tag=None, keep=False):
     child_env = dict(os.environ)
     if env:
         child_env.update(env)
+    # The command is a list, never a shell string, so nothing in it can be
+    # re-parsed as shell syntax. Its parts come from this repository's own
+    # constants and from the paths on the benchmark host -- the site
+    # directory, the dataset path, the interpreter -- and not from anything
+    # an outside party can supply; the dataset path is a fixed list here, not
+    # an argument a caller can point anywhere.
     # The output files are named after the run, not after the tag alone: two
     # runners that overlap on the same dataset and arm would otherwise open
     # the SAME files with truncation while both children write, and each

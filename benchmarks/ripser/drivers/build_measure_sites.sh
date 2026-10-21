@@ -40,6 +40,26 @@ export CARGO_TARGET_DIR=$REPO/target
 
 cd "$REPO"
 
+# THE LOCK, shared with sync_engine_to_server.sh. The sync replaces the
+# engine files one at a time, so a build that starts in the middle of it
+# would compile a MIXTURE of two revisions -- every file passes its checksum
+# and the result does not describe any single revision. So the two cannot
+# overlap: the build waits for the sync to finish, and holds the lock while
+# it runs.
+LOCK=/tmp/.canns_engine_sync.lock
+waited=0
+while [ -e "$LOCK" ]; do
+    if [ "$waited" -ge 120 ]; then
+        echo "REFUSING: the sync lock $LOCK has been held for more than two minutes"
+        exit 1
+    fi
+    echo "  waiting for the engine sync to finish ($LOCK)..."
+    sleep 5
+    waited=$((waited + 5))
+done
+touch "$LOCK"
+trap 'rm -f "$LOCK"' EXIT
+
 # The old builds are moved aside, not deleted: the barcode cross-check needs
 # a build of the OLD code to compare the new code against.
 for s in site_ship6 site_cpu_final; do

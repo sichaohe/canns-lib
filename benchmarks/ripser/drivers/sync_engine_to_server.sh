@@ -91,6 +91,14 @@ echo "syncing engine sources to $HOST:$PORT$DST"
 # expansion; an embedded single quote is closed, escaped and reopened.
 q() { printf "'%s'" "$(printf '%s' "$1" | sed "s/'/'\\\\''/g")"; }
 
+# THE LOCK. The sync replaces the engine files one at a time, so a build that
+# starts in the middle of it would read a MIXTURE of two revisions -- every
+# file passes its checksum and the measurement does not describe any single
+# revision. The build driver takes the same lock, so the two cannot overlap.
+LOCK=/tmp/.canns_engine_sync.lock
+ssh_try "touch $LOCK" || { echo "REFUSING: cannot take the sync lock on the host" >&2; exit 1; }
+trap 'ssh_try "rm -f $LOCK" >/dev/null 2>&1 || true' EXIT
+
 for f in $FILES; do
     if [ ! -f "$REPO/$f" ]; then
         echo "  MISSING LOCALLY: $f" >&2
