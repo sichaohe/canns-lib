@@ -25,7 +25,11 @@
 # without nvcc), and a build without it silently falls back to the CPU
 # apparent pre-pass and is ~35% slower -- which reads exactly like a
 # regression in the change under test.
-set -euo pipefail
+# NOT `set -u`. Conda's activate script reads ADDR2LINE, which is not set in
+# a non-interactive shell, and `set -u` turns that into a fatal error that
+# kills this script before it builds anything. The same trap is in
+# corpus_quiet_run.sh.
+set -eo pipefail
 
 REPO=${CANNS_BENCH_REPO:-/home/sichaohe/canns-lib-dev}
 STAMP=${CANNS_BENCH_STAMP:-pre_early_exit}
