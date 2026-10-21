@@ -143,10 +143,14 @@ def check(path, expect_ratio_max=None, verbose=True):
             w = float((r.get("wall_s") or "").strip() or 0)
         except ValueError:
             w = 0.0
-        if w <= 0:
-            errs.append("rep=%s who=%s: the wall clock is %r -- the run did "
-                        "not do any work" % (r.get("rep"), r.get("who"),
-                                             r.get("wall_s")))
+        # A row that TIMED OUT has no wall clock, and that is a legal
+        # result; a row with no wall clock and no timeout is a run that did
+        # nothing.
+        timed_out = (r.get("verdict") or "").strip() == "TIMEOUT"
+        if w <= 0 and not timed_out:
+            errs.append("rep=%s who=%s: the wall clock is %r and the row does "
+                        "not say it timed out -- the run did not do any work"
+                        % (r.get("rep"), r.get("who"), r.get("wall_s")))
         if r.get("who") == "ours":
             ours_walls.append(w)
     if ours_walls and min(ours_walls) > 0:

@@ -187,9 +187,15 @@ def check(path, sizes=None, max_loadavg=0.0, max_foreign_cpu=0.25):
             w = float((r.get("wall_s") or "").strip() or 0)
         except ValueError:
             w = 0.0
-        if w <= 0:
-            fails.append("%s the wall clock is %r -- the run did not do any "
-                         "work" % (row_label(r), r.get("wall_s")))
+        # A row that TIMED OUT has no wall clock, and that is a legal
+        # result -- the reference did not finish inside the limit, which is
+        # exactly what the scale wall is. What is not legal is a row that
+        # has no wall clock and no timeout: that is a run that did nothing.
+        timed_out = "TIMEOUT" in ((r.get("error") or "") + (r.get("note") or "")).upper()
+        if w <= 0 and not timed_out:
+            fails.append("%s the wall clock is %r and the row does not say it "
+                         "timed out -- the run did not do any work"
+                         % (row_label(r), r.get("wall_s")))
         if is_ours(r):
             ours_walls.append(w)
     if ours_walls and min(ours_walls) > 0:

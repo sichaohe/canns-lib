@@ -183,10 +183,14 @@ def check(paths, datasets=None, sides=None, min_reps=5, max_loadavg=0.0,
             w = float((r.get("wall_s") or "").strip() or 0)
         except ValueError:
             w = 0.0
-        if w <= 0:
-            fails.append("%s / %s: the wall clock is %r -- the run did not do "
-                         "any work" % (r.get("dataset"), r.get("side"),
-                                       r.get("wall_s")))
+        # A row that TIMED OUT has no wall clock, and that is a legal
+        # result; a row with no wall clock and no timeout is a run that did
+        # nothing.
+        timed_out = (r.get("verdict") or "").strip() == "TIMEOUT"
+        if w <= 0 and not timed_out:
+            fails.append("%s / %s: the wall clock is %r and the row does not "
+                         "say it timed out -- the run did not do any work"
+                         % (r.get("dataset"), r.get("side"), r.get("wall_s")))
         if r.get("side") not in reference_sides:
             ours_walls.append(w)
     if ours_walls and min(ours_walls) > 0:
