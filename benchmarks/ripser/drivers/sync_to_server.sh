@@ -26,27 +26,55 @@ DST=${CANNS_BENCH_DIR:-/home/sichaohe/canns-lib-dev/benchmarks/ripser}
 
 # The paths are relative to the tree, so a file in `checkers/` is listed as
 # `checkers/check_x.py` and lands in the same subdirectory on the host.
+#
+# A DIRECTORY is expanded here, file by file, and every file is still
+# checked for size and md5 after the move. The point of the explicit list is
+# that a file which did not land fails LOUDLY; a directory expansion keeps
+# that property without a thirty-line list that has to be edited every time
+# a checker is added, and a file that no longer exists is still noticed
+# (the expansion would find nothing, and the count would not match).
 FILES="harness/scale_scan.py harness/standard_bench.py harness/unified_ablation.py \
 harness/t_arm_equivalence.py harness/foreign_cpu.py harness/o3_profile.py \
 harness/o3_cpu_scaling.py harness/clean_h2h.py harness/h2h_coeff_ab.py \
 harness/cofacet_early_exit_ab.py harness/barcode_equivalence.py \
-harness/bench_core.py \
+harness/bench_core.py harness/filtration_sweep.py harness/nsfix_ab.py \
+harness/characterize_gridcells.py harness/validate_gridcells.py \
+harness/bounds_gridcells_ab.py \
 drivers/quiet_window_watch.sh drivers/corpus_quiet_run.sh \
 drivers/build_abl_variants.sh drivers/build_measure_sites.sh \
 drivers/fetch_clean_tables.sh drivers/sync_engine_to_server.sh \
-tools/cross_batch.py \
+tools/cross_batch.py tools/reduce_split.py \
 checkers/check_scale_scan.py checkers/check_standard_bench.py \
 checkers/check_unified_ablation.py checkers/check_gridcells_bench.py \
 checkers/check_clean_h2h.py checkers/check_nsfix_ab.py \
 checkers/check_bounds_ab.py checkers/check_validate_gridcells.py \
 checkers/check_characterize_gridcells.py checkers/check_o3_profile.py \
 checkers/check_o3_cpu_scaling.py checkers/check_h2h_coeff_ab.py \
-checkers/check_reduce_split.py checkers/check_cofacet_early_exit_ab.py"
+checkers/check_reduce_split.py checkers/check_cofacet_early_exit_ab.py \
+checkers/check_filtration_sweep.py checkers/check_final_h2h.py \
+checkers/check_gap.py checkers/quiet_gate.py"
+
+# Directories to expand, one file per line, relative to the tree.
+DIRS="harness checkers tools"
 
 SSH="ssh -i $KEY -p $PORT -o ConnectTimeout=15 sichaohe@$HOST"
 
 echo "syncing to $HOST:$PORT$DST"
+# Expand the directories into the file list, and drop the duplicates: the
+# explicit list and the directories overlap on purpose, and a file must not
+# be synced twice.
+SYNC_FILES=""
 for f in $FILES; do
+    SYNC_FILES="$SYNC_FILES $f"
+done
+for d in $DIRS; do
+    for f in $(cd "$SRC" && find "$d" -type f -name "*.py" | sort); do
+        SYNC_FILES="$SYNC_FILES $f"
+    done
+done
+SYNC_FILES=$(for f in $SYNC_FILES; do echo "$f"; done | sort -u)
+
+for f in $SYNC_FILES; do
     if [ ! -f "$SRC/$f" ]; then
         echo "  MISSING LOCALLY: $f" >&2
         exit 1
@@ -83,4 +111,4 @@ for f in $FILES; do
     fi
     printf "  ok  %-34s %8s bytes  %s\n" "$f" "$remote_size" "$remote_md5"
 done
-echo "all $(( $(echo $FILES | wc -w) )) files synced and verified"
+echo "all $(( $(echo $SYNC_FILES | wc -w) )) files synced and verified"

@@ -132,6 +132,27 @@ def run_measured(argv, env=None, timeout=1800, cwd=None, tag=None, keep=False):
                     probe.record(), probe.record_max(), env)
 
 
+def with_foreign(fn, *args, **kwargs):
+    """Run `fn(*args, **kwargs)` while the foreign load is sampled.
+
+    Returns `(result, foreign_mean, foreign_max)`. The two numbers are
+    strings, ready for a table row.
+
+    This is the wrapper for the runners that measure their child some other
+    way -- `/usr/bin/time` for the elapsed time and the peak RSS, say. It
+    leaves the measurement of the child EXACTLY as it was and only adds the
+    reading of the host, so a table gains the column that proves it was
+    measured in a quiet window without any of its numbers changing meaning.
+
+    The numbers are strings on purpose: a probe that never got a sample
+    reports "" rather than 0.0, because "" means "we do not know" and 0.0
+    would read as "the box was provably idle".
+    """
+    with foreign_cpu.Probe() as probe:
+        result = fn(*args, **kwargs)
+    return result, probe.record(), probe.record_max()
+
+
 def quiet_enough(measured, gate=FOREIGN_GATE):
     """Whether a measured run was quiet enough to be a measurement.
 

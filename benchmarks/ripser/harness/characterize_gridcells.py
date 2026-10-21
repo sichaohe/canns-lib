@@ -50,6 +50,8 @@ import numpy as np
 site, path, maxdim, coeff = sys.argv[1], sys.argv[2], int(sys.argv[3]), int(sys.argv[4])
 sys.path.insert(0, site)
 from canns_lib.ripser import ripser
+
+import bench_core
 d = np.load(path)
 np.fill_diagonal(d, 0.0)
 t0 = time.perf_counter()
@@ -165,10 +167,12 @@ def main() -> int:
         env["CANNS_RIPSER_STATS"] = "1"
         with open("/tmp/_char.out", "w") as fo:
             t0 = time.perf_counter()
-            p = subprocess.run(["/usr/bin/time", "-f", "__T__%e %M", PY, "-c", CHILD,
-                                args.site, path, str(args.maxdim), str(args.coeff)],
-                               stdout=fo, stderr=subprocess.PIPE, text=True,
-                               env=env, timeout=3600)
+            p, foreign, foreign_max = bench_core.with_foreign(
+                subprocess.run,
+                ["/usr/bin/time", "-f", "__T__%e %M", PY, "-c", CHILD,
+                 args.site, path, str(args.maxdim), str(args.coeff)],
+                stdout=fo, stderr=subprocess.PIPE, text=True,
+                env=env, timeout=3600)
             wall = time.perf_counter() - t0
         st = parse_stats(p.stderr)
         child_wall = ""
@@ -212,6 +216,8 @@ def main() -> int:
             "proc_s": "%.4f" % wall,
             "rss_kb": m1.group(2) if m1 else "",
             "loadavg": open("/proc/loadavg").read().split()[0],
+            "foreign_cpu": foreign,
+            "foreign_max": foreign_max,
             "threads": threads,
             "commit": commit,
             "build_md5": build_md5,
@@ -230,6 +236,7 @@ def main() -> int:
               "dim2_pivot_build_s",
               "ph_wall_s", "ph_reduce_s", "ph_assemble_s",
               "wall_s", "proc_s", "rss_kb", "loadavg",
+              "foreign_cpu", "foreign_max",
               "threads", "commit", "build_md5"]
     with open(args.out, "w", newline="") as fh:
         w = csv.DictWriter(fh, fieldnames=fields)

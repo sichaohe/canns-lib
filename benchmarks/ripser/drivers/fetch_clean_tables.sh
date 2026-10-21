@@ -40,6 +40,11 @@ TABLES=(
   "unified_ablation:/tmp/unified_ablation_clean.csv:unified_ablation.csv:checkers/check_unified_ablation.py:"
   "standard_bench:/tmp/standard_bench_5rep_clean.csv:standard_bench_5rep.csv:checkers/check_standard_bench.py:"
   "std_cpu:/tmp/standard_bench_ripser_cpu_clean.csv:standard_bench_ripser_cpu.csv:checkers/check_standard_bench.py:--min-reps 1 --sides ripser_cpu --reference-side ripser_cpu"
+  "clean_h2h:/tmp/clean_h2h_clean.csv:clean_h2h.csv:checkers/check_clean_h2h.py:"
+  "filtration_sweep:/tmp/filtration_sweep_clean.csv:filtration_sweep.csv:checkers/check_filtration_sweep.py:"
+  "o3_profile:/tmp/o3_profile_clean.csv:o3_profile.csv:checkers/check_o3_profile.py:"
+  "o3_cpu_scaling:/tmp/o3_cpu_scaling_clean.csv:o3_cpu_scaling.csv:checkers/check_o3_cpu_scaling.py:"
+  "early_exit_ab:/tmp/cofacet_early_exit_ab_clean.csv:cofacet_early_exit_ab.csv:checkers/check_cofacet_early_exit_ab.py:"
 )
 
 echo "=== the host's own account of the run ==="

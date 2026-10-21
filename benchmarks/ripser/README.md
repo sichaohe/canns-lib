@@ -81,12 +81,15 @@ from each other, so they can still be read one at a time.
    -- the cores used by other users' processes, read from `/proc` while the
    row was being measured -- and not the load average, which counts the
    measurement itself and therefore cannot separate our own work from
-   somebody else's. The checkers take `--max-foreign-cpu`, and the watcher
-   that produces the tables discards a whole batch rather than keeping half
-   of it. A second, independent line of evidence is that the same table is
-   measured twice on a quiet host and the copies are compared cell by cell
-   (`tools/cross_batch.py`): a neighbour's job would not make two independent
-   measurements agree.
+   somebody else's. The gate is one implementation, `checkers/quiet_gate.py`,
+   and seventeen of the nineteen checkers use it; a table that does not carry
+   the reading FAILS, because a table that cannot be shown to have been
+   measured on a quiet host is not a measurement. The two checkers that do not
+   use it compare bar values and counts, which do not depend on the host's
+   speed, and say so. A second, independent line of evidence is that the same
+   table is measured twice on a quiet host and the copies are compared cell by
+   cell (`tools/cross_batch.py`): a neighbour's job would not make two
+   independent measurements agree.
 
 ## How to add an experiment
 

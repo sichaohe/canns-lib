@@ -55,6 +55,9 @@ import time
 
 import numpy as np
 
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import bench_core
+
 GRID = "/home/sichaohe/gridcells"
 RP = "/home/sichaohe/ph_work/ripserpp/ripserplusplus/build3/ripser++"
 
@@ -335,12 +338,23 @@ def main() -> int:
         pp_in = prepare_ripserpp_input(d)
         w_us = w_pp = float("inf")
         o = None
+        foreign = foreign_max = ""
         for _ in range(args.reps):
-            tw, bars_us = run_ours(args.site, d, t, args.coeff)
+            (tw, bars_us), f_us, m_us = bench_core.with_foreign(
+                run_ours, args.site, d, t, args.coeff)
             w_us = min(w_us, tw)
             tp0 = time.perf_counter()
-            o = run_ripserpp(pp_in, t)
+            o, f_pp, m_pp = bench_core.with_foreign(run_ripserpp, pp_in, t)
             w_pp = min(w_pp, time.perf_counter() - tp0)
+            # The worst foreign load over the cell, over both sides and over
+            # the repetitions: the cell is a measurement only if every part
+            # of it was taken on a quiet host.
+            for f, m in ((f_us, m_us), (f_pp, m_pp)):
+                try:
+                    foreign = max(float(foreign or 0.0), float(f))
+                    foreign_max = max(float(foreign_max or 0.0), float(m))
+                except (TypeError, ValueError):
+                    pass
         os.unlink(pp_in)
         bars_pp = [[float(x) for x in b] for b in o.get(1, [])]
 
@@ -352,7 +366,9 @@ def main() -> int:
                "finite_pairs": n_pairs, "distinct_values": n_distinct,
                "near_tie_pairs": near,
                "ours_s": "%.3f" % w_us, "ripserpp_s": "%.3f" % w_pp,
-               "ratio": "%.3f" % (w_us / w_pp) if w_pp else ""}
+               "ratio": "%.3f" % (w_us / w_pp) if w_pp else "",
+               "foreign_cpu": "%.4f" % foreign if foreign != "" else "",
+               "foreign_max": "%.3f" % foreign_max if foreign_max != "" else ""}
         ok = True
         for dim in (0, 1):
             a = o.get(dim, [])
@@ -390,6 +406,7 @@ def main() -> int:
     fields = ["key", "n", "finite_pct", "threshold", "finite_pairs", "distinct_values",
               "near_tie_pairs", "ours_s", "ripserpp_s", "ratio",
               "bars_ours_d0", "bars_pp_d0", "unmatched_d0", "max_rel_dev_d0",
+              "foreign_cpu", "foreign_max",
               "bars_ours_d1", "bars_pp_d1", "unmatched_d1", "max_rel_dev_d1",
               "h1_md5_ours", "oracle", "oracle_agrees_with", "verdict", "reused"]
     with open(args.out, "w", newline="") as fh:

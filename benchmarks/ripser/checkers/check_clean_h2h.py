@@ -35,6 +35,8 @@ import shutil
 import sys
 import tempfile
 
+import quiet_gate
+
 # ---- EXPECTED: the grid. The denominator is computed from THIS, not from
 # ---- the row count of the file.
 # The grid is derived from the TABLE, not fixed here: a head-to-head that
@@ -283,6 +285,7 @@ def negative_self_test(path):
 
 def main() -> int:
     ap = argparse.ArgumentParser()
+    quiet_gate.add_arguments(ap)
     ap.add_argument("csv_path")
     ap.add_argument("--expect-ratio-max", type=float, default=None)
     ap.add_argument("--no-self-test", action="store_true")
@@ -298,6 +301,8 @@ def main() -> int:
     print("  cells: %d rows (%d reps x %d implementations); the minimum is %d reps"
           % (len(_rows), len(_reps), len(EXPECTED_WHO), MIN_REPS))
     errs = check(args.csv_path, args.expect_ratio_max)
+    errs += quiet_gate.gate(args.csv_path, args.max_foreign_cpu,
+                            label='clean_h2h.csv')
     if not args.no_self_test:
         errs += negative_self_test(args.csv_path)
 

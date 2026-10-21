@@ -32,6 +32,8 @@ import shutil
 import sys
 import tempfile
 
+import quiet_gate
+
 # The sides that must be present.
 SIDES = ("ours", "ripserpp")
 
@@ -146,11 +148,14 @@ MUTATIONS = ("one_more_round", "different_columns", "zero_heap", "drop_a_row",
 
 def main() -> int:
     ap = argparse.ArgumentParser()
+    quiet_gate.add_arguments(ap)
     ap.add_argument("csv", nargs="?", default="reduce_split.csv")
     ap.add_argument("--self-test", action="store_true")
     args = ap.parse_args()
 
     errs = check(args.csv)
+    errs += quiet_gate.gate(args.csv, args.max_foreign_cpu,
+                            label='reduce_split.csv')
     rows = list(csv.DictReader(open(args.csv, newline="")))
     dims = sorted({r["dim"] for r in rows})
     print("expected cells : %d sides x %d dimensions = %d"

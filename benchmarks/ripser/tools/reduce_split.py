@@ -40,7 +40,8 @@ import sys
 MUST_MATCH = ("cols", "rounds", "heap_max", "col_rounds_max")
 
 FIELDS = ["side", "dim", "cols", "rounds", "heap_max", "col_rounds_max",
-          "cofacets", "scan_s", "fill_s", "reduce_s", "total_s", "source"]
+          "cofacets", "scan_s", "fill_s", "reduce_s", "total_s", "source",
+          "foreign_cpu", "foreign_max"]
 
 
 def parse_ours(path):
@@ -111,7 +112,7 @@ def parse_pp(path):
     return out
 
 
-def build(ours_path, pp_path, out_path):
+def build(ours_path, pp_path, out_path, foreign_cpu="", foreign_max=""):
     ours = parse_ours(ours_path)
     pp = parse_pp(pp_path)
     rows = []
@@ -120,6 +121,13 @@ def build(ours_path, pp_path, out_path):
             rows.append(ours[dim])
         if dim in pp:
             rows.append(pp[dim])
+    # The quiet-window reading belongs to the RUN, not to a dimension, so it
+    # is the same on every row. It has to be passed in: this script compares
+    # two logs that were produced elsewhere, and a log of a run on a busy
+    # host cannot be shown to be a measurement of the code.
+    for r in rows:
+        r["foreign_cpu"] = foreign_cpu
+        r["foreign_max"] = foreign_max
     with open(out_path, "w", newline="") as fh:
         w = csv.DictWriter(fh, fieldnames=FIELDS)
         w.writeheader()
@@ -204,6 +212,11 @@ def main() -> int:
     ap.add_argument("--pp")
     ap.add_argument("--out", default="reduce_split.csv")
     ap.add_argument("--check")
+    ap.add_argument("--foreign-cpu", default="",
+                    help="the mean foreign cores during the run that produced "
+                         "the logs. The table is not a measurement without it.")
+    ap.add_argument("--foreign-max", default="",
+                    help="the largest foreign rate seen in one sampling window")
     ap.add_argument("--no-self-test", action="store_true")
     args = ap.parse_args()
 
@@ -223,7 +236,7 @@ def main() -> int:
     if not args.ours or not args.pp:
         print("usage: --ours <log> --pp <log> [--out csv]", file=sys.stderr)
         return 2
-    build(args.ours, args.pp, args.out)
+    build(args.ours, args.pp, args.out, args.foreign_cpu, args.foreign_max)
     print("CHECK %s" % args.out)
     errs = check(args.out)
     if not args.no_self_test:

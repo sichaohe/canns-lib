@@ -29,6 +29,8 @@ import statistics
 import sys
 import tempfile
 
+import quiet_gate
+
 EXPECTED_REPS = 2
 EXPECTED_ARMS = ("inf_T", "inf_CAP", "cap_T", "cap_CAP", "T", "CAP")
 
@@ -158,6 +160,7 @@ def negative_self_test(path):
 
 def main() -> int:
     ap = argparse.ArgumentParser()
+    quiet_gate.add_arguments(ap)
     ap.add_argument("csv_path")
     ap.add_argument("--no-self-test", action="store_true")
     args = ap.parse_args()
@@ -167,6 +170,8 @@ def main() -> int:
         return 2
     print("CHECK %s" % args.csv_path)
     errs = check(args.csv_path)
+    errs += quiet_gate.gate(args.csv_path, args.max_foreign_cpu,
+                            label='filtration_sweep.csv')
     if not args.no_self_test:
         errs += negative_self_test(args.csv_path)
     if errs:

@@ -26,6 +26,8 @@ import shutil
 import sys
 import tempfile
 
+import quiet_gate
+
 MATRIX_DIR = "/home/sichaohe/gridcells/matrices"
 
 REQUIRED = ["matrix", "n", "pairs", "finite_pairs", "inf_frac",
@@ -175,6 +177,7 @@ def check_sidecar(csv_path, sidecar_path):
 
 def main() -> int:
     ap = argparse.ArgumentParser()
+    quiet_gate.add_arguments(ap)
     ap.add_argument("csv", nargs="?", default="characterize_gridcells.csv")
     ap.add_argument("--matrix-dir", default=MATRIX_DIR)
     ap.add_argument("--self-test", action="store_true")
@@ -184,6 +187,8 @@ def main() -> int:
     args = ap.parse_args()
 
     fails = check(args.csv, args.matrix_dir)
+    fails += quiet_gate.gate(args.csv, args.max_foreign_cpu,
+                            label='characterize_gridcells.csv')
     if args.sidecar:
         fails += check_sidecar(args.csv, args.sidecar)
     if fails:

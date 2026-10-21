@@ -35,6 +35,8 @@ import statistics
 import sys
 import tempfile
 
+import quiet_gate
+
 ARMS = ["ours_gpu", "ours_gpu_phase", "ripserpp_build3", "ripserpp_build2"]
 STAGES = [
     "setup", "edges", "dim0",
@@ -350,6 +352,7 @@ def self_test(path, reps):
 
 def main():
     ap = argparse.ArgumentParser()
+    quiet_gate.add_arguments(ap)
     ap.add_argument("csv")
     ap.add_argument("--reps", type=int, default=5)
     ap.add_argument("--self-test", action="store_true")
@@ -365,6 +368,8 @@ def main():
 
     rows = load(args.csv)
     fails = check(rows, args.reps)
+    fails += quiet_gate.gate(args.csv, args.max_foreign_cpu,
+                            label='gap_analysis.csv')
     if args.summary:
         write_summary(args.summary, rows, args.reps)
         print("wrote %s" % args.summary)

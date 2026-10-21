@@ -19,25 +19,50 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   at least the running maximum, so such a cofacet is rejected either way, and
   all seven call sites filter on the threshold before they use the diameter.
 
-  Measured on one binary, the two arms selected by `CANNS_RIPSER_COFACET_EARLY_EXIT`,
-  interleaved, with the per-dimension reduction rounds identical in both arms
-  (51,267 / 111,105 / 178,067) and the barcode unchanged:
+  The barcode is unchanged: the two arms of the switch produce the same bars,
+  and the old and the new build produce byte-identical barcodes on all eight
+  inputs of the cross-build check (`o3_4096`, `asa_1200` and six corpus
+  matrices). The reduction rounds per dimension are identical between the
+  arms as well -- the arms do the same work, and the change is in the cost of
+  doing it.
 
-  | dim | early exit off | early exit on |
-  |---|---|---|
-  | 1 | 12.52 s | 6.11 s |
-  | 2 | 22.95 s | 8.23 s |
-  | 3 | 62.40 s | 22.30 s |
-
-  The win is in the regime where the matrix does not fit in cache: on the
-  1,200-vertex ASA matrix, which is 2.9 MB and is run at threshold = infinity,
-  the two arms are within 0.5% of each other.
+  The timing is not quoted here. The first A/B was run on a host where
+  another user was using eleven cores, and a number measured on a busy host
+  is a number about the host; the table is re-measured in a quiet window
+  before any of it is published. The win is in the large-matrix,
+  finite-threshold regime -- on a small, cache-resident matrix at threshold =
+  infinity there is no miss to save.
 
   `CANNS_RIPSER_COFACET_EARLY_EXIT=0` restores the old behaviour exactly --
   both early exits are under the same switch, because a partly-on early exit
   is not an ablation but a third thing that no table describes.
 
 ### Changed
+- **The quiet-window gate is now one implementation, used by seventeen of the
+  nineteen checkers.** The benchmark host is shared, a neighbour's job moves
+  the numbers by up to 40%, and it can flip a comparison's sign -- so a table
+  measured on a busy host is not a table with a caveat, it is not a table.
+  Seven checkers had the gate and twelve did not, which meant that twelve
+  tables could not be shown to have been measured on a quiet host at all,
+  and the ones that quote timings were the ones that mattered. The gate is
+  now `checkers/quiet_gate.py`: a table with no foreign-load reading FAILS
+  with the reason spelled out, a row over the threshold fails, and the two
+  checkers that compare bar values and counts do not call it, because those
+  numbers do not depend on how busy the host was.
+- **The runners that produce tables now sample the host's load while the
+  child runs.** `harness/bench_core.py`'s `with_foreign` wraps a runner's
+  existing call -- the same command, the same `/usr/bin/time` wrapper, the
+  same parsing -- and adds the reading, so the table gains the column that
+  proves it was measured in a quiet window without any of its numbers
+  changing meaning. The head-to-head, the filtration sweep, the corpus
+  characterisation, the per-cell corpus cross-check and the A/B tables all
+  go through it now.
+- **The quiet-window chain covers the tables the paper quotes.** The watcher
+  produces the head-to-head, the filtration sweep, the o3 profile, the o3
+  thread scaling and the early-exit A/B in the same window as the rest of the
+  chain; the corpus watcher produces the characterisation and the per-cell
+  cross-check in the corpus window; the fetch script fetches and checks each
+  one with the gate.
 - **The benchmark harness has a shared core.** `harness/bench_core.py` holds
   the parts every runner does the same way: the host's paths and interpreter,
   the foreign-load-measured child runner, the parsers for the build's own

@@ -42,9 +42,9 @@ import shutil
 import sys
 import tempfile
 
+import quiet_gate
+
 ARMS = ("early_on", "early_off")
-# The mean foreign cores a row may carry. The peak is a diagnostic only.
-FOREIGN_GATE = 0.25
 # How much slower the early-on arm may be and still pass.
 REGRESSION_MARGIN = 1.02
 
@@ -60,7 +60,7 @@ def _median(vals):
     return s[n // 2] if n % 2 else 0.5 * (s[n // 2 - 1] + s[n // 2])
 
 
-def check(path, verbose=True):
+def check(path, verbose=True, max_foreign_cpu=quiet_gate.DEFAULT_GATE):
     """Returns a list of failure strings (empty == PASS)."""
     errs = []
     with open(path, newline="") as fh:
@@ -77,15 +77,10 @@ def check(path, verbose=True):
                         % (r["dataset"], r["arm"], r["rep"], r["verdict"]))
         if not r["bars"]:
             errs.append("%s/%s rep %s has no barcode" % (r["dataset"], r["arm"], r["rep"]))
-        try:
-            if float(r["foreign_cpu"]) > FOREIGN_GATE:
-                errs.append("%s/%s rep %s: foreign load %.3f cores is over the "
-                            "%.2f gate -- the box was not quiet"
-                            % (r["dataset"], r["arm"], r["rep"],
-                               float(r["foreign_cpu"]), FOREIGN_GATE))
-        except (ValueError, KeyError):
-            errs.append("%s/%s rep %s: foreign load %r is not a number"
-                        % (r["dataset"], r["arm"], r["rep"], r.get("foreign_cpu")))
+    # The quiet-window gate is the shared one, so that "the numbers in this
+    # table were measured on a busy host" is a FAILURE like everywhere else.
+    errs += quiet_gate.gate(rows, max_foreign_cpu,
+                             label="cofacet_early_exit_ab.csv")
 
     if errs:
         return errs
@@ -183,11 +178,12 @@ MUTATIONS = ("barcode_differs", "barvalues_differ", "rounds_differ", "different_
 
 def main() -> int:
     ap = argparse.ArgumentParser()
+    quiet_gate.add_arguments(ap)
     ap.add_argument("csv", nargs="?", default="cofacet_early_exit_ab.csv")
     ap.add_argument("--self-test", action="store_true")
     args = ap.parse_args()
 
-    errs = check(args.csv)
+    errs = check(args.csv, max_foreign_cpu=args.max_foreign_cpu)
     with open(args.csv, newline="") as fh:
         rows = list(csv.DictReader(fh))
     datasets = sorted({r["dataset"] for r in rows})
