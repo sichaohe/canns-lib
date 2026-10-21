@@ -62,6 +62,11 @@ ASA_MATRIX = "/home/sichaohe/ph_work/ph_dm_1200.npy"
 # out of a two-minute run shows up as 0.004, which is what it is worth.
 FOREIGN_GATE = 0.25
 
+# A counter that makes each measured run's output file name unique. It is
+# not a lock: it only stops two overlapping runs from writing to the same
+# file.
+_RUN_COUNTER = [0]
+
 
 class Measured(object):
     """One measured run: what it printed, how long it took, how busy the box was."""
@@ -104,12 +109,15 @@ def run_measured(argv, env=None, timeout=1800, cwd=None, tag=None, keep=False):
     child_env = dict(os.environ)
     if env:
         child_env.update(env)
-    if tag:
-        out_path = "/tmp/_bench_%s.out" % tag
-        err_path = "/tmp/_bench_%s.err" % tag
-    else:
-        out_path = "/tmp/_bench_out_%d" % os.getpid()
-        err_path = "/tmp/_bench_err_%d" % os.getpid()
+    # The output files are named after the run, not after the tag alone: two
+    # runners that overlap on the same dataset and arm would otherwise open
+    # the SAME files with truncation while both children write, and each
+    # parent would parse the other one's output as its own barcode and stats.
+    # The pid and a counter make the name unique per run.
+    unique = "%s_%d_%d" % (tag or "run", os.getpid(), _RUN_COUNTER[0])
+    _RUN_COUNTER[0] += 1
+    out_path = "/tmp/_bench_%s.out" % unique
+    err_path = "/tmp/_bench_%s.err" % unique
     with open(out_path, "w") as fo, open(err_path, "w") as fe:
         with foreign_cpu.Probe() as probe:
             t0 = time.perf_counter()
@@ -125,7 +133,7 @@ def run_measured(argv, env=None, timeout=1800, cwd=None, tag=None, keep=False):
         stdout = fh.read()
     with open(err_path) as fh:
         stderr = fh.read()
-    if not keep and not tag:
+    if not keep:
         os.unlink(out_path)
         os.unlink(err_path)
     return Measured(argv, stdout, stderr, proc.returncode, wall,

@@ -26,11 +26,16 @@
 # and is ~35% slower -- which reads exactly like a regression in the
 # change under test.
 set -e
-cd ~/canns-lib-dev
+# THE REPOSITORY PATH IS NOT HARDCODED. The driver that calls this script
+# (`build_measure_sites.sh`) honours CANNS_BENCH_REPO, and if this script
+# built into a different checkout, the driver would report success while the
+# ablation sites it then measures came from somewhere else entirely.
+REPO=${CANNS_BENCH_REPO:-/home/sichaohe/canns-lib-dev}
+cd "$REPO"
 export PATH=$HOME/.cargo/bin:$HOME/.local/bin:/usr/local/cuda/bin:$PATH
 source ~/miniconda3/etc/profile.d/conda.sh
 conda activate rl
-export CARGO_TARGET_DIR=$HOME/canns-lib-dev/target
+export CARGO_TARGET_DIR=$REPO/target
 
 build_variant() {
     name=$1
@@ -44,13 +49,13 @@ build_variant() {
     rm -rf "$out"
     maturin build --release --out "$out" \
       --features parallel,hugepage,extension-module,gpu$extra 2>&1 | tail -2
-    rm -rf ~/canns-lib-dev/site_abl_$name
-    mkdir -p ~/canns-lib-dev/site_abl_$name
-    cd "$out" && for w in *.whl; do unzip -o -q "$w" -d ~/canns-lib-dev/site_abl_$name; done
-    cd ~/canns-lib-dev
+    rm -rf "$REPO/site_abl_$name"
+    mkdir -p "$REPO/site_abl_$name"
+    cd "$out" && for w in *.whl; do unzip -o -q "$w" -d "$REPO/site_abl_$name"; done
+    cd "$REPO"
     # the extension's md5 is the identity of the variant: two variants with
     # the same md5 are the same build, and the ablation would be empty
-    so=$(find ~/canns-lib-dev/site_abl_$name -name "*.so" | head -1)
+    so=$(find "$REPO/site_abl_$name" -name "*.so" | head -1)
     echo "BUILT site_abl_$name  md5=$(md5sum "$so" | cut -c1-16)"
 }
 

@@ -348,7 +348,12 @@ where
                 // But a maximum that is already +inf cannot be raised by any
                 // further distance, so the remaining reads cannot change it
                 // -- and the value returned is the exact one.
-                if !cofacet_diameter.is_finite() {
+                //
+                // `== +inf`, NOT `!is_finite()`: a running maximum of -inf
+                // (a matrix with a negative infinite distance) can still be
+                // RAISED by a later finite distance, so breaking on it
+                // would return a diameter that is too small.
+                if cofacet_diameter == f32::INFINITY {
                     break;
                 }
             }

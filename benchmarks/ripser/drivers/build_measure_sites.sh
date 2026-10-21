@@ -66,6 +66,11 @@ build_site ship6     parallel,hugepage,extension-module,gpu
 build_site cpu_final parallel,hugepage,extension-module
 
 # The ablation variants, each one cargo feature away from the shipping build.
+# The repository path is EXPORTED, so the variant builder builds into the
+# same checkout as the builds above: if it built somewhere else, this script
+# would report success while the ablation sites it then measures came from
+# another tree entirely.
+export CANNS_BENCH_REPO="$REPO"
 bash "$REPO/benchmarks/ripser/drivers/build_abl_variants.sh"
 
 echo "ALL SITES BUILT"

@@ -33,6 +33,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   finite-threshold regime -- on a small, cache-resident matrix at threshold =
   infinity there is no miss to save.
 
+  **Where this applies, stated exactly.** The early exit is in the HOST-side
+  cofacet enumerator, which is the reduction's path in every build, GPU
+  included: the reduction runs on the host whatever the build. It is **not**
+  in the GPU's column-assembly kernels, which compute the cofacet diameter
+  themselves (`kernel/ripser_kernels.cu` reads the `dim + 1` distances and
+  then tests `cd <= threshold`), so the assembly phase keeps the old
+  behaviour. The change makes the reduction cheaper; it does not make the
+  assembly cheaper.
+
   `CANNS_RIPSER_COFACET_EARLY_EXIT=0` restores the old behaviour exactly --
   both early exits are under the same switch, because a partly-on early exit
   is not an ablation but a third thing that no table describes.
