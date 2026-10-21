@@ -38,8 +38,9 @@ O3 = "/home/sichaohe/ph_work/ripserpp/ripserplusplus/examples/o3_4096.point_clou
 CHILD = r'''
 import hashlib, os, sys, time
 import numpy as np
-site, path, kind, maxdim, coeff = (
-    sys.argv[1], sys.argv[2], sys.argv[3], int(sys.argv[4]), int(sys.argv[5]))
+site, path, kind, maxdim, coeff, thresh = (
+    sys.argv[1], sys.argv[2], sys.argv[3], int(sys.argv[4]), int(sys.argv[5]),
+    sys.argv[6])
 sys.path.insert(0, site)
 import canns_lib
 resolved = os.path.realpath(canns_lib.__file__)
@@ -51,12 +52,12 @@ from canns_lib.ripser import ripser
 
 if kind == "point_cloud":
     X = np.loadtxt(path, dtype=np.float64)
-    r = ripser(X, maxdim=maxdim, thresh=float("inf"), coeff=coeff,
+    r = ripser(X, maxdim=maxdim, thresh=float(thresh), coeff=coeff,
                distance_matrix=False, progress_bar=False)["dgms"]
 else:
     d = np.load(path)
     np.fill_diagonal(d, 0.0)
-    r = ripser(d, maxdim=maxdim, thresh=float("inf"), coeff=coeff,
+    r = ripser(d, maxdim=maxdim, thresh=float(thresh), coeff=coeff,
                distance_matrix=True, progress_bar=False)["dgms"]
 h = hashlib.sha256()
 counts = []
@@ -71,14 +72,14 @@ print("COUNTS " + "|".join(counts))
 print("HASH " + h.hexdigest())
 '''
 
-FIELDS = ("input", "kind", "maxdim", "coeff", "old_counts", "new_counts",
+FIELDS = ("input", "kind", "maxdim", "coeff", "thresh", "old_counts", "new_counts",
           "old_hash", "new_hash", "equal", "old_s", "new_s", "verdict")
 
 
-def run(site, path, kind, maxdim, coeff, timeout):
+def run(site, path, kind, maxdim, coeff, thresh, timeout):
     t0 = time.perf_counter()
     proc = subprocess.run(
-        [PY, "-c", CHILD, site, path, kind, str(maxdim), str(coeff)],
+        [PY, "-c", CHILD, site, path, kind, str(maxdim), str(coeff), thresh],
         capture_output=True, text=True, timeout=timeout)
     wall = time.perf_counter() - t0
     if proc.returncode != 0:
@@ -106,28 +107,35 @@ def main() -> int:
     args = ap.parse_args()
 
     inputs = [
-        ("o3_4096", O3, "point_cloud", 3, 2),
-        ("asa_1200", ASA, "distance_matrix", 2, 47),
+        # The point cloud gets the threshold the o3 suite uses (1.4). At
+        # threshold = inf the filtration is the full Vietoris-Rips complex of
+        # 4096 points -- C(4096,3) = 11.4 billion triangles -- which is not a
+        # benchmark, it is a hang, and it is what an earlier version of this
+        # script did: the run was killed and the failure looked like a
+        # difference in the barcode.
+        ("o3_4096", O3, "point_cloud", 3, 2, "1.4"),
+        ("asa_1200", ASA, "distance_matrix", 2, 47, "inf"),
     ]
     corpus = sorted(glob.glob(os.path.join(args.corpus, "*.npy")))
     if args.corpus_limit:
         corpus = corpus[:args.corpus_limit]
     for p in corpus:
-        inputs.append((os.path.basename(p)[:-4], p, "distance_matrix", 2, 47))
+        inputs.append((os.path.basename(p)[:-4], p, "distance_matrix", 2, 47, "inf"))
 
     rows = []
     bad = 0
-    for name, path, kind, maxdim, coeff in inputs:
+    for name, path, kind, maxdim, coeff, thresh in inputs:
         if not os.path.exists(path):
             print("  SKIP %s (no %s)" % (name, path))
             continue
-        oc, oh, os_, ov = run(args.old_site, path, kind, maxdim, coeff, args.timeout)
-        nc, nh, ns, nv = run(args.new_site, path, kind, maxdim, coeff, args.timeout)
+        oc, oh, os_, ov = run(args.old_site, path, kind, maxdim, coeff, thresh, args.timeout)
+        nc, nh, ns, nv = run(args.new_site, path, kind, maxdim, coeff, thresh, args.timeout)
         equal = (oh == nh) and (oc == nc) and ov == "OK" and nv == "OK"
         if not equal:
             bad += 1
         rows.append({
             "input": name, "kind": kind, "maxdim": maxdim, "coeff": coeff,
+            "thresh": thresh,
             "old_counts": oc, "new_counts": nc,
             "old_hash": oh, "new_hash": nh,
             "equal": "yes" if equal else "NO",
