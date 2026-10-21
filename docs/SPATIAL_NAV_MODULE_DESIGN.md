@@ -107,13 +107,23 @@ fig, ax = env.plot_environment(show_agents=[agent])  # matplotlib rendering help
 - Include integration test that seeds both RatInABox (Python) and new module (Rust) and asserts trajectories within tolerance (`np.allclose` with 1e-6) across 1k steps.
 
 ## 10. Implementation Phases
-1. **Scaffold**: create `crates/spatial`, add to workspace, expose empty PyO3 module, add Python package stub.
+> **Status: done, and the layout is not the one this plan assumed.** The
+> repository is a **single crate** (`Cargo.toml` at the root, all Rust under
+> `src/`), not a workspace with a `crates/` directory -- there is no
+> `crates/spatial` and never will be: the module lives in `src/spatial/`
+> and is exposed through `src/lib.rs` and the `python/canns_lib/` shim.
+> The phases below are kept for the record; what they describe happened
+> in `src/spatial/`.
+1. ~~**Scaffold**: create `crates/spatial`, add to workspace~~ -- **done differently**: the module is `src/spatial/` in the single crate, with the Python stub in `python/canns_lib/`.
 2. **Environment geometry**: implement boundary parsing, walls, sampling, collision detection; port unit tests.
 3. **Motion core**: implement OU, drift, wall repulsion, collision resolution; validate with golden tests.
 4. **Trajectory import & history**: add ring buffer export to numpy; ensure deterministic behaviour.
 5. **Python API polish**: docstrings, type hints, fallback plotting helpers, re-export defaults.
 6. **Benchmarks & profiling**: integrate into `benchmarks/` (e.g., `benchmarks/spatial/compare.py`).
 7. **Documentation**: update README, add module docs, migration guide from RatInABox.
+
+> The old `crates/` tree -- an earlier, abandoned attempt at the multi-crate
+> layout, 21 files that `Cargo.toml` never referenced -- was removed.
 
 ## 10.5 Planned Optimizations Beyond RatInABox
 - **Geometry acceleration**: use R*-tree (via `rstar`) to prune wall collision candidates before exact intersection tests, reducing per-step complexity.
