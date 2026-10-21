@@ -105,6 +105,9 @@ import numpy as np
 site, thresh, mode = sys.argv[1], float(sys.argv[2]), sys.argv[3]
 sys.path.insert(0, site)
 from canns_lib.ripser import ripser
+
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import bench_core
 d = np.load("/home/sichaohe/ph_work/ph_dm_1200.npy")
 np.fill_diagonal(d, 0.0)
 if mode == "capped":
@@ -196,6 +199,14 @@ def main() -> int:
     commit = source_commit()
     print("device=%s  commit=%s  reps=%d  variants=%s"
           % (dev, commit, args.reps, [v[0] for v in variants]), flush=True)
+    # THE MEASUREMENT LOCK, taken for the whole run. These runners spawn their
+    # children directly rather than through bench_core, so the lock has to be
+    # taken here: the quiet-window gate counts the cores used by processes
+    # that are NOT ours, and it cannot see two of our own measurements
+    # running beside each other -- which moves the numbers exactly as much as
+    # a neighbour's job does. The lock is released when the process exits.
+    _LOCK = bench_core.measurement_lock(label="unified_ablation")
+    _LOCK.__enter__()
 
     rows = []
     for rep in range(1, args.reps + 1):

@@ -288,6 +288,9 @@ site, path, kind, maxdim, thresh, coeff = (sys.argv[1], sys.argv[2], sys.argv[3]
                                             int(sys.argv[6]))
 sys.path.insert(0, site)
 from canns_lib.ripser import ripser
+
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import bench_core
 if kind == "points":
     X = np.loadtxt(path, dtype=np.float64)
     dmat = False
@@ -396,6 +399,14 @@ def main() -> int:
     _env, device = gpu_env()
     print("device=%s  commit(gpu)=%s  md5(gpu)=%s  md5(cpu)=%s  threads=%d"
           % (device, prov_gpu[0], prov_gpu[1], prov_cpu[1], threads), flush=True)
+    # THE MEASUREMENT LOCK, taken for the whole run. These runners spawn their
+    # children directly rather than through bench_core, so the lock has to be
+    # taken here: the quiet-window gate counts the cores used by processes
+    # that are NOT ours, and it cannot see two of our own measurements
+    # running beside each other -- which moves the numbers exactly as much as
+    # a neighbour's job does. The lock is released when the process exits.
+    _LOCK = bench_core.measurement_lock(label="standard_bench")
+    _LOCK.__enter__()
 
     rows = []
     for key, _fname, kind, maxdim, pp_args, exp_file in DATASETS:

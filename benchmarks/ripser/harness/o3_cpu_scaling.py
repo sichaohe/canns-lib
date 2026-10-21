@@ -60,6 +60,9 @@ site, path, maxdim, thresh, coeff = (sys.argv[1], sys.argv[2], int(sys.argv[3]),
                                      float(sys.argv[4]), int(sys.argv[5]))
 sys.path.insert(0, site)
 from canns_lib.ripser import ripser
+
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import bench_core
 X = np.loadtxt(path, dtype=np.float64)
 t0 = time.perf_counter()
 r = ripser(X, maxdim=maxdim, thresh=thresh, coeff=coeff,
@@ -209,6 +212,14 @@ def main() -> int:
                     help="measure only the reference implementation; used to "
                          "re-measure it without repeating our own runs")
     args = ap.parse_args()
+    # THE MEASUREMENT LOCK, taken for the whole run. These runners spawn their
+    # children directly rather than through bench_core, so the lock has to be
+    # taken here: the quiet-window gate counts the cores used by processes
+    # that are NOT ours, and it cannot see two of our own measurements
+    # running beside each other -- which moves the numbers exactly as much as
+    # a neighbour's job does. The lock is released when the process exits.
+    _LOCK = bench_core.measurement_lock(label="o3_cpu_scaling")
+    _LOCK.__enter__()
 
     rows = []
     print("=== the classic Ripser (one thread) ===", flush=True)

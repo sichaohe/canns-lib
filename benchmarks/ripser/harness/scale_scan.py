@@ -80,6 +80,9 @@ site, path, maxdim, coeff, thresh = (sys.argv[1], sys.argv[2], int(sys.argv[3]),
                                      int(sys.argv[4]), float(sys.argv[5]))
 sys.path.insert(0, site)
 from canns_lib.ripser import ripser
+
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import bench_core
 d = np.load(path)
 t0 = time.perf_counter()
 r = ripser(d, maxdim=maxdim, thresh=thresh, coeff=coeff,
@@ -302,6 +305,14 @@ def main() -> int:
     env, dev = gpu_env()
     print("commit=%s  our_md5=%s  ref_md5=%s  threads=%d  device=%s"
           % (commit, our_md5, pp_md5, threads, dev), flush=True)
+    # THE MEASUREMENT LOCK, taken for the whole run. These runners spawn their
+    # children directly rather than through bench_core, so the lock has to be
+    # taken here: the quiet-window gate counts the cores used by processes
+    # that are NOT ours, and it cannot see two of our own measurements
+    # running beside each other -- which moves the numbers exactly as much as
+    # a neighbour's job does. The lock is released when the process exits.
+    _LOCK = bench_core.measurement_lock(label="scale_scan")
+    _LOCK.__enter__()
 
     rows = []
     for n in [int(x) for x in args.sizes.split(",") if x.strip()]:
