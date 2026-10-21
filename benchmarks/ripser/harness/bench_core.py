@@ -199,8 +199,13 @@ def run_measured(argv, env=None, timeout=1800, cwd=None, tag=None, keep=False):
                     proc.kill()
                     proc.wait()
                 wall = time.perf_counter() - t0
-                foreign = probe.record()
-                foreign_max = probe.record_max()
+            # The reading is taken AFTER the probe's block has closed: the
+            # probe computes its mean over the window that ends when the
+            # block exits, and reading it inside the block asks for a mean
+            # over no samples at all -- which comes back as "" and makes the
+            # row look like it has no reading at all.
+            foreign = probe.record()
+            foreign_max = probe.record_max()
     with open(out_path) as fh:
         stdout = fh.read()
     with open(err_path) as fh:
