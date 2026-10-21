@@ -35,6 +35,8 @@ import statistics
 import sys
 import tempfile
 
+import quiet_gate
+
 ARMS = [
     "ours_gpu_radix",
     "ours_gpu_hostsort",
@@ -276,6 +278,7 @@ def self_test(path, reps):
 
 def main():
     ap = argparse.ArgumentParser()
+    quiet_gate.add_arguments(ap)
     ap.add_argument("csv")
     ap.add_argument("--reps", type=int, default=5)
     ap.add_argument("--self-test", action="store_true")
@@ -288,6 +291,8 @@ def main():
         return 0 if good else 1
 
     fails = check(load(args.csv), args.reps)
+    fails += quiet_gate.gate(args.csv, args.max_foreign_cpu,
+                            label='final_h2h.csv')
     if fails:
         print("FAIL")
         for f in fails:

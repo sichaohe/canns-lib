@@ -29,7 +29,14 @@ LOG=/tmp/corpus_watch.log
 REPO=${CANNS_BENCH_REPO:-/home/sichaohe/canns-lib-dev}
 DRIVER=${GCA_DRIVER:-/home/sichaohe/ph_work/gcbench/gca_bench.py}
 OUT=/tmp/gca_results_clean.csv
-MODULE=$REPO/benchmarks/ripser
+# The probe lives in `harness/`, NEXT TO the runners that import it. This
+# path was the tree root, which was correct until the harness became a
+# tree; after the move it was wrong, and the probe failed with an import
+# error that `2>/dev/null` swallowed -- so the watcher read an EMPTY
+# foreign load every minute and, because an empty reading is not a
+# quiet one, it never started. The symptom was a watcher that logged
+# `foreign_cores=` forever.
+MODULE=$REPO/benchmarks/ripser/harness
 
 MAX_FOREIGN=0.25
 QUIET_FOREIGN=0.25
@@ -98,6 +105,32 @@ for i in $(seq 1 1440); do
             mv "$OUT" "$OUT.contaminated"
             echo "$(date +%Y-%m-%dT%H:%M:%S) CONTAMINATED: $OUT -> $OUT.contaminated" >> "$LOG"
         fi
+
+        # THE OTHER TWO CORPUS TABLES. The characterisation and the
+        # per-cell barcode cross-check run over the same 97 matrices, they
+        # both quote timings, and neither carried a foreign-load reading
+        # before the gate existed -- so neither could be shown to have been
+        # measured on a quiet host. They are measured in the SAME window as
+        # the corpus benchmark, which is the point: the window is the scarce
+        # resource, and three tables that disagree about how busy the host
+        # was are worse than one that agrees.
+        for spec in \
+            "characterize_gridcells:/tmp/characterize_gridcells_clean.csv:benchmarks/ripser/harness/characterize_gridcells.py --site /home/sichaohe/canns-lib-dev/site_ship6 --out /tmp/characterize_gridcells_clean.csv:benchmarks/ripser/checkers/check_characterize_gridcells.py" \
+            "gridcells_validation:/tmp/gridcells_validation_clean.csv:benchmarks/ripser/harness/validate_gridcells.py --site /home/sichaohe/canns-lib-dev/site_cpu_final --reps 2 --out /tmp/gridcells_validation_clean.csv:benchmarks/ripser/checkers/check_validate_gridcells.py"
+        do
+            IFS=: read -r tag out cmd checker <<<"$spec"
+            rm -f "$out"
+            python3 $cmd > "/tmp/${tag}_clean.log" 2>&1
+            if batch_is_clean "$out"; then
+                echo "$(date +%Y-%m-%dT%H:%M:%S) clean: $out" >> "$LOG"
+                python3 "$checker" "$out" --max-foreign-cpu "$MAX_FOREIGN" \
+                    > "/tmp/${tag}_clean_check.log" 2>&1
+                echo "$(date +%Y-%m-%dT%H:%M:%S) checked: $out" >> "$LOG"
+            else
+                mv "$out" "$out.contaminated"
+                echo "$(date +%Y-%m-%dT%H:%M:%S) CONTAMINATED: $out -> $out.contaminated" >> "$LOG"
+            fi
+        done
         exit 0
     fi
     sleep 60

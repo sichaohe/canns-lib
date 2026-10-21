@@ -30,6 +30,8 @@ import shutil
 import sys
 import tempfile
 
+import quiet_gate
+
 GRID_MATRIX_DIR = "/home/sichaohe/gridcells/matrices"
 RTOL = 1e-5
 
@@ -218,6 +220,7 @@ MUTATIONS = ["drop_row", "dup_row", "flip_verdict", "bump_dev",
 
 def main() -> int:
     ap = argparse.ArgumentParser()
+    quiet_gate.add_arguments(ap)
     ap.add_argument("--csv", default="gridcells_validation.csv")
     ap.add_argument("--matrix-dir", default=GRID_MATRIX_DIR)
     ap.add_argument("--self-test", action="store_true",
@@ -233,6 +236,8 @@ def main() -> int:
         print("      make every cell look missing.")
         return 1
     fails = check(args.csv, args.matrix_dir)
+    fails += quiet_gate.gate(args.csv, args.max_foreign_cpu,
+                            label='gridcells_validation.csv')
     with open(args.csv, newline="") as fh:
         n_rows = len(list(csv.DictReader(fh)))
 

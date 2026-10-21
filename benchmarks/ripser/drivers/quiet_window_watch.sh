@@ -35,7 +35,14 @@
 
 LOG=/tmp/quiet_watch.log
 REPO=${CANNS_BENCH_REPO:-/home/sichaohe/canns-lib-dev}
-MODULE=$REPO/benchmarks/ripser
+# The probe lives in `harness/`, NEXT TO the runners that import it. This
+# path was the tree root, which was correct until the harness became a
+# tree; after the move it was wrong, and the probe failed with an import
+# error that `2>/dev/null` swallowed -- so the watcher read an EMPTY
+# foreign load every minute and, because an empty reading is not a
+# quiet one, it never started. The symptom was a watcher that logged
+# `foreign_cores=` forever.
+MODULE=$REPO/benchmarks/ripser/harness
 
 # The gate. A row measured while somebody else was using more than this
 # many cores ON AVERAGE is not a measurement of our code. The number is
@@ -140,6 +147,47 @@ for i in $(seq 1 1440); do
                 python benchmarks/ripser/harness/standard_bench.py --sides ripser_cpu \
                 --reps 2 --timeout 900 --out /tmp/standard_bench_ripser_cpu_clean.csv
             echo "$(date +%Y-%m-%dT%H:%M:%S) reference CPU baseline done" >> "$LOG"
+
+            # THE HEAD-TO-HEAD. This is the paper's central comparison, and it
+            # was the table most exposed to the host's load: a neighbour's
+            # job moved the ratio by 15% between two windows, which is why
+            # the ratio is host-dependent and cannot be quoted from a
+            # measurement that does not say how busy the host was.
+            #
+            # `VAR=x func` is NOT used here: in bash a variable assignment
+            # before a FUNCTION call survives the call, so the next
+            # measurement would silently inherit the previous one's site.
+            export CANNS_RIPSER_SITE=$REPO/site_ship6
+            measure /tmp/clean_h2h_clean.csv /tmp/clean_h2h_clean.log \
+                python benchmarks/ripser/harness/clean_h2h.py --reps 9 \
+                --timeout 900 --out /tmp/clean_h2h_clean.csv
+            echo "$(date +%Y-%m-%dT%H:%M:%S) head-to-head done" >> "$LOG"
+
+            measure /tmp/filtration_sweep_clean.csv /tmp/filtration_sweep_clean.log \
+                python benchmarks/ripser/harness/filtration_sweep.py --reps 2 \
+                --out /tmp/filtration_sweep_clean.csv
+            echo "$(date +%Y-%m-%dT%H:%M:%S) filtration sweep done" >> "$LOG"
+            unset CANNS_RIPSER_SITE
+
+            # The early-exit A/B, on the CPU build -- the one the classical
+            # suite's "our build against the single-threaded classic Ripser"
+            # row is about.
+            measure /tmp/cofacet_early_exit_ab_clean.csv /tmp/cofacet_early_exit_ab_clean.log \
+                python benchmarks/ripser/harness/cofacet_early_exit_ab.py \
+                --site $REPO/site_cpu_final --reps 3 \
+                --out /tmp/cofacet_early_exit_ab_clean.csv
+            echo "$(date +%Y-%m-%dT%H:%M:%S) early-exit A/B done" >> "$LOG"
+
+            # THE O3 PROFILE AND ITS THREAD SCALING. o3_4096 is the instance
+            # we lose on, and the two tables say where the time goes and
+            # whether the serial core is the problem.
+            measure /tmp/o3_profile_clean.csv /tmp/o3_profile_clean.log \
+                python benchmarks/ripser/harness/o3_profile.py \
+                --out /tmp/o3_profile_clean.csv
+            measure /tmp/o3_cpu_scaling_clean.csv /tmp/o3_cpu_scaling_clean.log \
+                python benchmarks/ripser/harness/o3_cpu_scaling.py \
+                --out /tmp/o3_cpu_scaling_clean.csv
+            echo "$(date +%Y-%m-%dT%H:%M:%S) o3 profile and thread scaling done" >> "$LOG"
         else
             echo "$(date +%Y-%m-%dT%H:%M:%S) the scale scan was contaminated -- waiting for another window" >> "$LOG"
         fi

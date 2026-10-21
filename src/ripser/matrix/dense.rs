@@ -3,6 +3,29 @@ use crate::ripser::matrix::traits::{
 };
 use crate::ripser::types::{CoefficientT, DiameterEntryT, DiameterIndexT, IndexT, ValueT};
 use crate::ripser::utils::{modp, BinomialCoeffTable};
+use std::sync::OnceLock;
+
+/// Whether the cofacet enumerator may stop reading distances as soon as the
+/// running maximum is already above the threshold.
+///
+/// ON by default. `CANNS_RIPSER_COFACET_EARLY_EXIT=0` turns it off, which is
+/// the ablation arm: it restores the old behaviour of paying all `dim + 1`
+/// distance reads for every candidate, including the ~99% that are
+/// rejected. The switch is read once, so the hot path carries no environment
+/// lookup -- only a branch on a bool that never changes.
+fn early_exit_enabled() -> bool {
+    static ENABLED: OnceLock<bool> = OnceLock::new();
+    *ENABLED.get_or_init(|| {
+        std::env::var("CANNS_RIPSER_COFACET_EARLY_EXIT")
+            .map(|v| {
+                !matches!(
+                    v.trim(),
+                    "0" | "false" | "False" | "no" | "No" | "off" | "OFF"
+                )
+            })
+            .unwrap_or(true)
+    })
+}
 
 // Note: Removed ripser compatibility traits since we're eliminating ripser_old
 
@@ -236,6 +259,14 @@ where
     modulus: CoefficientT,
     dist: &'a M,
     binomial_coeff: &'a BinomialCoeffTable,
+    /// The diameter above which the cofacet is rejected by every caller.
+    reject_above: ValueT,
+    /// Whether the early exit is enabled.
+    ///
+    /// The ablation arm turns it off, and it has to restore the OLD
+    /// behaviour EXACTLY: a partly-on early exit is not an ablation, it is
+    /// a third thing that no table describes.
+    early_exit: bool,
 }
 
 impl<M> CofacetEnumerator for SimplexCoboundaryEnumerator<'_, M>
@@ -276,10 +307,56 @@ where
         // the next; and prefetching 3 rows x 3 columns to serve 3 real loads is
         // a 3x instruction amplification that offsets any residual gain.
         // Latency in this loop is already covered by speculation.
+        //
+        // ⚠ BOTH of those experiments were run at n = 300..500, where the
+        // whole distance matrix is a few hundred KB and every load is a
+        // cache HIT. They therefore say nothing about the regime this loop
+        // actually runs in for a real dataset: at o3_4096 the matrix is
+        // 4096 points = 8.39M f32 = 33.5 MB, the rows are 16 KB apart, and
+        // the reads miss. The fix that DOES scale with the matrix size is not
+        // a better prefetch but FEWER READS -- see the early exit below.
         let mut cofacet_diameter = self.simplex.get_diameter();
         for &w in &self.vertices[..self.num_vertices] {
             let d = self.dist.get(self.v as usize, w as usize);
             cofacet_diameter = cofacet_diameter.max(d);
+            // EARLY EXIT.
+            //
+            // Every caller of this enumerator keeps a cofacet only when its
+            // diameter is <= the threshold, and the true diameter is >= the
+            // running maximum. So once the running maximum is already above
+            // the threshold, the cofacet is rejected either way, and the
+            // remaining distances cannot change that verdict.
+            //
+            // This is not a rare case. At o3_4096 (4096 points, threshold
+            // 1.4) only 1.3% of the enumerated cofacet candidates are under
+            // the threshold, and the old code paid all dim+1 distance reads
+            // for every one of the other 98.7% -- each a scattered miss into
+            // a 33.5 MB matrix.
+            //
+            if self.early_exit {
+                // The diameter returned in that case is a partial maximum,
+                // but it is already above the threshold, so no caller can
+                // observe it: a caller that kept it would keep the exact
+                // diameter too.
+                if cofacet_diameter > self.reject_above {
+                    break;
+                }
+                // AN INFINITE DIAMETER IS FINAL. The matrices in the
+                // grid-cells corpus carry +inf for the ~30% of pairs that
+                // are genuinely missing, and the corpus runs at threshold =
+                // inf, so the threshold test above can never fire there.
+                // But a maximum that is already +inf cannot be raised by any
+                // further distance, so the remaining reads cannot change it
+                // -- and the value returned is the exact one.
+                //
+                // `== +inf`, NOT `!is_finite()`: a running maximum of -inf
+                // (a matrix with a negative infinite distance) can still be
+                // RAISED by a later finite distance, so breaking on it
+                // would return a diameter that is too small.
+                if cofacet_diameter == f32::INFINITY {
+                    break;
+                }
+            }
         }
 
         let cofacet_index =
@@ -320,6 +397,7 @@ where
         dist: &'a M,
         binomial_coeff: &'a BinomialCoeffTable,
         modulus: CoefficientT,
+        threshold: ValueT,
     ) -> Self {
         // Fill the simplex vertices into an inline stack buffer (no heap alloc).
         let mut vertices = [0 as IndexT; MAX_COFACET_SIMPLEX_VERTICES];
@@ -337,6 +415,8 @@ where
             modulus,
             dist,
             binomial_coeff,
+            reject_above: threshold,
+            early_exit: early_exit_enabled(),
         }
     }
 }
@@ -421,8 +501,9 @@ impl<const LOWER: bool> HasCofacets for CompressedDistanceMatrix<LOWER> {
         n: IndexT,
         binomial_coeff: &'a BinomialCoeffTable,
         modulus: CoefficientT,
+        threshold: ValueT,
     ) -> Self::Enumerator<'a> {
-        SimplexCoboundaryEnumerator::new(simplex, dim, n, self, binomial_coeff, modulus)
+        SimplexCoboundaryEnumerator::new(simplex, dim, n, self, binomial_coeff, modulus, threshold)
     }
 }
 

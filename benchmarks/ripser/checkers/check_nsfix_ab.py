@@ -36,6 +36,8 @@ import statistics
 import sys
 import tempfile
 
+import quiet_gate
+
 REF_MD5 = ("ee1f5283091dd645a3dd53e6f1a7eac6:"
            "9f0aa8c3ff2716f2fbb9ecd523bb0210:"
            "2d018d8fe9c1895b1b74f837af59ed20")
@@ -182,6 +184,7 @@ def negative_self_test(path, base, new):
 
 def main() -> int:
     ap = argparse.ArgumentParser()
+    quiet_gate.add_arguments(ap)
     ap.add_argument("csv_path")
     ap.add_argument("--base", default="orig")
     ap.add_argument("--new", default="base")
@@ -194,6 +197,8 @@ def main() -> int:
 
     print("CHECK %s" % args.csv_path)
     errs = check(args.csv_path, args.base, args.new)
+    errs += quiet_gate.gate(args.csv_path, args.max_foreign_cpu,
+                            label='nsfix_ab.csv')
     if not args.no_self_test:
         errs += negative_self_test(args.csv_path, args.base, args.new)
 

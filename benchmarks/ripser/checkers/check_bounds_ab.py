@@ -38,6 +38,8 @@ import sys
 import tempfile
 from collections import Counter, defaultdict
 
+import quiet_gate
+
 ARMS = ["inf_T", "inf_CAP", "cap_T", "cap_CAP"]
 BUILDS = ["ship", "bounds"]
 BASE = "ship"
@@ -221,6 +223,7 @@ GRID_MUTATIONS = ["gc_mismatch", "gc_slower", "gc_md5"]
 
 def main() -> int:
     ap = argparse.ArgumentParser()
+    quiet_gate.add_arguments(ap)
     ap.add_argument("csv", nargs="?", default="bounds_ab.csv")
     ap.add_argument("--gridcells", default="",
                     help="the dim-1 cross-check table (optional)")
@@ -228,6 +231,8 @@ def main() -> int:
     args = ap.parse_args()
 
     fails = check(args.csv)
+    fails += quiet_gate.gate(args.csv, args.max_foreign_cpu,
+                            label='bounds_ab.csv')
     if args.gridcells and os.path.exists(args.gridcells):
         fails += check_gridcells(args.gridcells)
     if fails:
