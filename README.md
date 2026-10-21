@@ -324,12 +324,87 @@ maturin develop --release --features parallel
 python -m pytest tests/ -v
 ```
 
+### Optional build features
+
+All of these are off by default, so the released wheel and `pip install -e .`
+are unchanged unless you ask for them.
+
+| Feature | What it does | How to turn it on |
+|---|---|---|
+| `parallel` | Rayon-parallel reduction and assembly. **On by default.** | `--features parallel` |
+| `hugepage` | `MADV_HUGEPAGE` on allocations of 2 MB or more. Linux only, and it is what maturin enables for the release wheels: the pivot map at dim=2 is a single ~13 GB allocation whose insert cost is dominated by page faults and TLB misses rather than by hashing. Worth about 1.24x end to end on a real 1200x1200 ASA workload. | `--features hugepage` |
+| `gpu` | An opt-in GPU apparent-pair pre-pass. The kernels in `kernel/` are compiled by `nvcc` when a CUDA toolkit is present and fall back to NVRTC, or to the CPU, when it is not -- so the build never requires a toolkit. On an A100 the pre-pass over 2.9e8 columns takes 0.093 s on the GPU against 12.0-15.5 s on the CPU. | `--features gpu` |
+| `binary-heap` | Restores `std::collections::BinaryHeap` as the reduction's working column heap, instead of the hand-rolled `CoboundaryHeap` (a classic top-down sift-down with an early exit, which is what ripser++'s `std::priority_queue` does). The two are pinned to the same pop order by a unit test. | `--features binary-heap` |
+| `legacy-auto-sparse` | Restores the pre-2026-10-20 auto-sparse condition, in which the sparse distance matrix was used whenever the threshold was below the maximum finite distance, without requiring the matrix to actually contain a missing pair. **This one exists for the ablation table and is not a supported configuration**: the unit tests pin the fixed behaviour and fail with this feature on. | `--features legacy-auto-sparse` |
+
+`mimalloc` (opt-in, and off by default because mimalloc 0.1.43 segfaults on
+macOS Darwin 26) and the timing/counter probes (`apparent-stats`,
+`gpu-phase-stats`, `walk-probe`) are documented in `Cargo.toml`, where each
+one says what it measures and what it costs.
+
+### The published wheels are CPU-only
+
+**The `gpu` feature is not in the release build.** `[tool.maturin]` sets
+`features = ["parallel", "hugepage", "extension-module"]`, so a wheel
+installed from PyPI contains no CUDA code at all: the apparent-pair pre-pass
+runs on the CPU, and the barcode is identical either way. The GPU pre-pass is
+an opt-in build, not a download.
+
+To get it, build the extension yourself:
+
+```bash
+# keep `extension-module` in the list: it is what makes PyO3 produce a
+# cdylib for Python instead of a binary linked against libpython
+maturin develop --release --features parallel,hugepage,extension-module,gpu
+```
+
+A CUDA toolkit is **not** required to build it. `build.rs` compiles
+`kernel/ripser_kernels.cu` with `nvcc` into a cubin and embeds it when a
+toolkit is on `PATH`; without one the build still succeeds and the driver
+JIT-compiles the same kernel file through NVRTC at run time. If there is no
+usable device, or the driver refuses the kernel, the run falls back to the CPU
+pre-pass — the library never *requires* a GPU to be correct, and the barcode
+does not change.
+
+To see which path a run actually took, set `CANNS_RIPSER_STATS=1` and read
+the `gpu_err` field of the `STATS` line on stderr: empty means the GPU
+pre-pass ran, and anything else is the reason it did not. A silent CPU
+fallback is otherwise indistinguishable from "the GPU was never tried".
+
+```bash
+CANNS_RIPSER_STATS=1 python -c "
+from canns_lib.ripser import ripser
+ripser(data, maxdim=2)
+" 2>&1 | grep -o 'gpu_err=\"[^\"]*\"'
+```
+
+The library uses **device 0**. `CUDA_VISIBLE_DEVICES` remaps which physical
+device that is, which is what you want on a host where another job holds the
+other device:
+
+```bash
+CUDA_VISIBLE_DEVICES=1 python -c "from canns_lib.ripser import ripser; ..."
+```
+
+The benchmark harness in `benchmarks/ripser/` has the same knob under the name
+`CANNS_BENCH_GPU` (it sets `CUDA_VISIBLE_DEVICES` for the child process), and
+it records the device in every row of every table it writes.
+
 ### Running Benchmarks
 
 ```bash
 cd benchmarks
 python compare_ripser.py --n-points 100 --maxdim 2 --trials 5
 ```
+
+`benchmarks/ripser/` also carries the head-to-head harness against
+`ripser++`, the standard-suite runner, the load characterisation and their
+checkers. Each table is produced by a script, and each has a checker that
+derives its own grid and refuses a table that does not match it; see
+`benchmarks/ripser/RESULTS-20261020.md` for the table-to-checker map. The
+tables themselves are not in the repository -- the grid-cell corpus they
+draw on has an unsettled licence, and only the scripts and the aggregate
+characterisation are published until it is.
 
 ## Technical Details
 

@@ -17,6 +17,8 @@ crate-type = ["cdylib"]
 path = "src/lib.rs"
 
 [dependencies]
+cudarc = { version = "0.12", features = ["cuda-version-from-build-system"], optional = true }
+libloading = { version = "0.8", optional = true }
 pyo3 = { version = "0.28.2" }
 numpy = "0.28.0"
 # Pin to 0.17 to match numpy 0.28's transitive ndarray requirement. If pinned
@@ -49,6 +51,117 @@ pyo3-build-config = "0.28"
 [features]
 default = ["parallel"]
 parallel = ["rayon"]
+# Opt-OUT: restore `std::collections::BinaryHeap` as the reduction's working
+# column heap. The DEFAULT is the hand-rolled `CoboundaryHeap`, whose `pop`
+# does the classic top-down sift-down with an early exit, instead of
+# BinaryHeap's `sift_down_to_bottom` (which always walks the hole to the
+# bottom of the tree). The reduction's coboundary heap reaches 9-11 million
+# entries, so the bottom of the tree is a cold cache line; the classic
+# sift-down stops early and usually never reaches it. ripser++ uses
+# `std::priority_queue`, whose `pop` is the classic variant.
+#
+# Measured on the ASA matrix (2026-10-20): -6.5% (inf input) / -6.9%
+# (capped input), three interleaved reps, byte-identical barcode.
+#
+# UNVERIFIED IN THE CURRENT DELIVERY: that measurement has no table behind
+# it -- the run it came from was not kept, so the number cannot be pointed
+# at a row. It is being re-measured by `benchmarks/ripser/unified_ablation.py`,
+# which turns this one switch off and nothing else, in one interleaved
+# pass, against the shipping build. Until that table exists, treat the
+# percentages above as a claim, not as a result.
+#
+# The two heaps are verified to produce the SAME pop order by the unit test
+# `coboundary_heap::pop_order_matches_binary_heap`.
+binary-heap = []
+
+# Opt-OUT: restore the pre-2026-10-20 auto-sparse condition, in which the
+# sparse distance matrix was used whenever the threshold was below the
+# maximum finite distance -- without requiring the matrix to actually
+# contain a missing pair. The ASA pipeline replaces the ~30% of `+inf`
+# pairs with M = 2*max_finite + 1, so `max_finite` becomes M and every
+# threshold T < M sent an ordinary DENSE matrix down the sparse path, which
+# is 4.3x slower here on identical work.
+#
+# This feature exists for the ablation table -- "all switches on against
+# exactly this one off" -- and is never enabled in a shipped build. The
+# unit tests pin the FIXED behaviour, so they fail with the feature on:
+# that is by design.
+legacy-auto-sparse = []
+
+# Opt-in: count cofacets examined / columns scanned during the apparent-pair
+# pre-pass and report them in the STATS line. OFF by default on purpose: the
+# counter sits in the innermost loop, and even an empty-branch check measured
+# ~6% on the apparent=1 path. With the feature off the bodies are
+# `#[inline(always)]` no-ops that the optimiser removes entirely, so a release
+# build pays nothing. Use it to answer "how deep does the early exit actually
+# scan", which decides whether batched/SIMD scanning could ever pay off.
+apparent-stats = []
+
+# Opt-in: the FINE-GRAINED timers inside the GPU apparent pre-pass
+# (upload / alloc / kernel / D2H / host-side materialisation), printed as the
+# GPUPHASE line.
+#
+# Separate from `apparent-stats` on purpose: that feature's cofacet counters
+# sit in the innermost loop of the walk and inflate it from 25.5 s to 79.1 s,
+# so its GPUPHASE numbers would be read against a distorted kernel. These
+# timers only call the clock; they touch no algorithm state.
+gpu-phase-stats = []
+# Opt-in: measure the two WRITE patterns the reduction walk performs on every
+# one of its 286,562,199 iterations -- the `bounds.push` into a reserved
+# Vec<u32>, and the two `births_and_deaths.push` calls into a Vec<f32> that
+# doubles its way to 2.29 GB.
+#
+# Why a separate feature rather than riding on `apparent-stats`: that feature's
+# cofacet counters inflate the walk itself from 25.5 s to 79.1 s, so its timings
+# are not comparable to the shipped baseline. These probes touch no algorithm
+# state (they allocate, fill and drop scratch buffers), so the barcode is
+# untouched and the numbers can be read against the normal wall time.
+walk-probe = []
+# ATTRIBUTION ABLATIONS. These build DELIBERATELY WRONG barcodes: they delete
+# one piece of work per feature so its cost can be measured directly by
+# diffing wall time against an unmodified build.
+#
+# Why ablation instead of timers: the apparent fast path runs 2.9e8 times on
+# the ASA matrix, so even two `Instant::now()` calls per iteration would cost
+# more (~50 ns each) than the thing being measured. Compile-time gates have
+# zero cost in the surviving build, and "delete the code and re-time" has no
+# instrumentation bias at all.
+#
+#   ablate-pivot-insert : skip `pivot_column_index.insert` on the apparent path
+#   ablate-birth-push   : skip the two `births_and_deaths.push` calls
+#
+# NEVER enable these in a shipped build; they corrupt the barcode.
+ablate-pivot-insert = []
+ablate-birth-push = []
+# ATTRIBUTION ONLY. Makes assembly's `contains_key` report "not a pivot"
+# unconditionally, which deletes the hash probe but changes which columns get
+# enqueued -- so the barcode is wrong and only wall time may be read.
+#
+# Purpose: assembly makes exactly C(n,3) = 287,280,400 membership queries on a
+# 13.1 GB table and the whole phase costs ~16.9 s. This prices the hash probes
+# alone, which is the ceiling on what a perfect negative filter (Bloom etc.)
+# could ever save. If the number is small, there is nothing to win here.
+ablate-assembly-membership = []
+# Opt-in: MADV_HUGEPAGE on allocations >= 2 MB. The pivot map at dim=2 is a
+# single ~13.1 GB allocation; measured, 92% of its insert cost is memory-system
+# overhead (3.28M first-touch faults, working set far beyond any TLB) rather
+# than hashing. See src/alloc_hugepage.rs. Linux only; a no-op elsewhere.
+# Incompatible with `mimalloc` -- Rust permits one `#[global_allocator]`.
+hugepage = []
+# Opt-in GPU apparent-pair detection via cudarc. Off by default: it adds a
+# CUDA build dependency, and every entry point degrades to the CPU pre-pass when
+# no device is present, so the default wheel build is unaffected.
+#
+# `cuda-version-from-build-system` lets cudarc detect the toolkit version at
+# build time instead of pinning one. It does NOT make nvcc a build requirement:
+# the kernels in kernel/ are compiled by nvcc only when it is available
+# (see build.rs), and the runtime falls back to compiling them through NVRTC --
+# which needs no toolkit at all -- or to the CPU. Measured: building the `gpu`
+# feature with an empty PATH still succeeds.
+#
+# Measured on an A100-SXM4-80GB, same 2.9e8 columns as the ASA matrix:
+# CPU 12.0-15.5 s -> GPU kernel 0.093 s, plus 0.095 s pinned readback.
+gpu = ["dep:cudarc", "dep:libloading"]
 # Opt-in: enable mimalloc as the global allocator. Off by default because
 # mimalloc 0.1.43 SIGSEGVs on macOS Darwin 26 — see NOTE on the mimalloc dep.
 mimalloc = ["dep:mimalloc"]

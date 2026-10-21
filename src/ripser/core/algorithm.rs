@@ -2,7 +2,7 @@ use crate::ripser::matrix::dense::{CompressedDistanceMatrix, CompressedUpperDist
 use crate::ripser::matrix::sparse::SparseDistanceMatrix;
 use crate::ripser::matrix::traits::{DistanceMatrix, EdgeProvider, HasCofacets, VertexBirth};
 use crate::ripser::types::{
-    CoefficientT, DiameterEntryT, DiameterIndexT, IndexT, RipsResults, ValueT,
+    CoefficientT, DiameterEntryT, DiameterIndexT, IndexT, PivotVal, RipsResults, ValueT,
 };
 use crate::ripser::utils::{modp, multiplicative_inverse_vector, BinomialCoeffTable};
 use rustc_hash::FxHashMap;
@@ -37,6 +37,40 @@ pub fn rips_dm(
     )
 }
 
+/// Whether the sparse distance matrix should be used instead of the dense one.
+///
+/// The rule has three parts, and the third one is the one that was missing:
+///
+/// * `threshold < max_finite` -- the filtration stops below the largest
+///   finite distance, so the matrix is mostly irrelevant above it.
+/// * `max_finite` is finite -- otherwise the comparison above is vacuous.
+/// * **the matrix actually contains missing pairs** -- a fully dense matrix
+///   has nothing for the sparse representation to save, and in this
+///   implementation the sparse path is the SLOWER one anyway.
+///
+/// The third clause exists because of the ASA pipeline: it replaces the
+/// ~30% of `+inf` pairs with `M = 2*max_finite + 1` so the matrix can be
+/// written to a text file, and `M` then becomes `max_finite`. With only the
+/// first two clauses, `threshold = T < M` sends that ordinary dense matrix
+/// down the sparse path, which measured 51.0 s against the dense path's
+/// 12.0 s on the same matrix with the same barcode.
+///
+/// The `legacy-auto-sparse` feature restores the pre-fix condition. It
+/// exists for the ablation table -- "all switches on against exactly this
+/// one off" -- and it is never enabled in a shipped build. The unit tests
+/// below pin the FIXED behaviour, so they fail with the feature on: that
+/// is by design, and the point of the feature is to measure the old
+/// behaviour, not to endorse it.
+#[cfg(not(feature = "legacy-auto-sparse"))]
+pub fn use_sparse_representation(threshold: f32, max_finite: f32, has_non_finite: bool) -> bool {
+    threshold < max_finite && max_finite.is_finite() && has_non_finite
+}
+
+#[cfg(feature = "legacy-auto-sparse")]
+pub fn use_sparse_representation(threshold: f32, max_finite: f32, _has_non_finite: bool) -> bool {
+    threshold < max_finite && max_finite.is_finite()
+}
+
 pub fn rips_dm_with_callback_and_interval(
     d: &[f32],
     modulus: i32,
@@ -58,6 +92,7 @@ pub fn rips_dm_with_callback_and_interval(
     let mut max = f32::NEG_INFINITY;
     let mut max_finite = max;
     let mut num_edges = 0;
+    let mut has_non_finite = false;
 
     // Use enclosing radius when users does not set threshold or
     // when users uses infinity as a threshold.
@@ -78,15 +113,38 @@ pub fn rips_dm_with_callback_and_interval(
         max = max.max(d_val);
         if d_val.is_finite() {
             max_finite = max_finite.max(d_val);
+        } else {
+            has_non_finite = true;
         }
         if d_val <= threshold {
             num_edges += 1;
         }
     }
 
-    // Decide whether to use dense or sparse representation
-    // Switch to sparse if threshold is significantly less than max finite distance
-    if threshold < max_finite && max_finite.is_finite() {
+    // Decide whether to use dense or sparse representation.
+    //
+    // ⚠ THE MATRIX MUST ACTUALLY HAVE MISSING PAIRS. The original condition
+    // was only `threshold < max_finite`, and that mis-fires on a FULLY DENSE
+    // matrix whose largest value happens to be an artificial cap: the ASA
+    // pipeline replaces the ~30% of +inf pairs with M = 2*max_finite + 1, so
+    // `max_finite` becomes M, any threshold T < M satisfies the condition, and
+    // an ordinary dense matrix is sent down the sparse path.
+    //
+    // MEASURED on the ASA matrix (1200^2, 30.0% of the off-diagonal pairs
+    // originally +inf), same barcode (md5 ee1f5283...) in every arm:
+    //
+    //     capped matrix, thresh = T, DENSE  : 12.0 s
+    //     capped matrix, thresh = T, SPARSE : 51.0 s   <- 4.3x slower
+    //     inf matrix,   thresh = T, DENSE  : 12.0 s
+    //
+    // The dense path is CORRECT for a matrix with +inf entries: a cofacet that
+    // contains a missing pair has an infinite diameter, and `inf <= T` is
+    // false, so it is filtered out exactly like the sparse path filters it.
+    // The sparse representation only pays off when the matrix really is
+    // missing pairs -- and in this implementation it does not even pay off
+    // then, because the dense enumerator rejects a capped pair with one
+    // comparison while the sparse enumerator walks adjacency lists.
+    if use_sparse_representation(threshold, max_finite, has_non_finite) {
         if verbose {
             eprintln!(
                 "DEBUG: Switching to sparse representation: threshold={}, max_finite={}",
@@ -481,10 +539,50 @@ where
         // Enumerate + sort edges once (ascending by diameter, descending by
         // index) and reuse for both H0 union-find and the descending-order
         // simplex list, avoiding a second O(E) enumeration and O(E log E) sort.
+        // ---------------------------------------------------------------------
+        // PHASE1 SPLIT (measurement only, behind CANNS_RIPSER_STATS).
+        //
+        // `STATS` in reduction.rs accounts for the walk per dimension, but the
+        // wall time also contains H0, the edge enumeration, and -- the part we
+        // had NO number for -- simplex assembly. ripser++ reports its assembly
+        // as an explicit line (ASSEMBLE COLS 3.42 s + hash copy 0.68 s), so
+        // without our own equivalent the "unattributed remainder" is just a
+        // difference of two unnamed numbers and nothing can be concluded from
+        // comparing it to theirs.
+        //
+        // This block changes no algorithm state; it only reads clocks and
+        // /proc, and it is off unless CANNS_RIPSER_STATS is set.
+        let ph_stats = std::env::var("CANNS_RIPSER_STATS").is_ok();
+        let rss_kb = || -> u64 {
+            let Ok(s) = std::fs::read_to_string("/proc/self/status") else {
+                return 0;
+            };
+            for line in s.lines() {
+                if let Some(rest) = line.strip_prefix("VmRSS:") {
+                    return rest
+                        .split_whitespace()
+                        .next()
+                        .and_then(|v| v.parse().ok())
+                        .unwrap_or(0);
+                }
+            }
+            0
+        };
+        let t_entry = std::time::Instant::now();
+        let rss_start = rss_kb();
+
         let edges = self.get_edges();
+        let ph_edges_s = t_entry.elapsed().as_secs_f64();
+        let rss_after_edges = rss_kb();
 
         // H0: get dim=1 columns_to_reduce (edges that form cycles)
+        let t_dim0 = std::time::Instant::now();
         let mut columns_to_reduce = self.compute_dim_0_pairs(&edges);
+        let ph_dim0_s = t_dim0.elapsed().as_secs_f64();
+        let rss_after_dim0 = rss_kb();
+        let mut ph_reduce_s = 0.0f64;
+        let mut ph_assemble_s = 0.0f64;
+        let rss_before_loop = rss_kb();
         if self.verbose {
             eprintln!(
                 "DEBUG: H0 complete, got {} columns for dim=1",
@@ -509,7 +607,13 @@ where
                 eprintln!("DEBUG: ===== Processing dimension {} =====", dim);
             }
             let mut pivot_column_index = FxHashMap::default();
-            pivot_column_index.reserve(columns_to_reduce.len());
+            // The reserve is NOT done here. Only `compute_pairs` knows whether
+            // the sharded apparent table gets built for this dimension, and
+            // that decides how many pivots this map will actually hold. When
+            // the table exists, apparent columns never insert into this map
+            // (`if _apparent_index.is_none()`), so reserving for all
+            // `columns_to_reduce` over-allocates by ~99.9% on the ASA matrix.
+            // See the reserve in reduction.rs, next to the table decision.
 
             if self.verbose {
                 eprintln!(
@@ -566,6 +670,11 @@ where
                 )
                 .map_err(|e| format!("Failed to create MatrixReducer: {}", e))?;
 
+                let t_red = if ph_stats {
+                    Some(std::time::Instant::now())
+                } else {
+                    None
+                };
                 reducer.compute_pairs(
                     &columns_to_reduce,
                     &mut pivot_column_index,
@@ -576,7 +685,13 @@ where
                     &mut self.births_and_deaths_by_dim[dim as usize],
                     &mut self.cocycles_by_dim[dim as usize],
                     self.do_cocycles,
+                    // Assembly will consume this map iff another dimension
+                    // follows. Only then does it need real O(1) membership.
+                    dim < self.dim_max,
                 );
+                if let Some(t) = t_red {
+                    ph_reduce_s += t.elapsed().as_secs_f64();
+                }
             }
 
             if self.verbose {
@@ -584,6 +699,40 @@ where
                     "DEBUG: dim={} reduction complete, pivot_map size={}",
                     dim,
                     pivot_column_index.len()
+                );
+            }
+
+            // Diagnostic for the pivot-map sizing question. Off unless
+            // CANNS_RIPSER_STATS is set, and when on it costs one extra pass
+            // over the keys -- which is why it is gated here rather than done
+            // unconditionally.
+            //
+            // The question it answers: `reserve(columns_to_reduce.len())`
+            // pre-allocates a table sized for EVERY enumerated column, but the
+            // number of entries actually inserted can be far smaller. On the ASA
+            // matrix that reservation is ~13.4 GB. If `len` comes back near
+            // `columns_to_reduce.len()` the reservation is honest and the only
+            // way down is a denser container; if `len` is small the
+            // reservation is simply oversized and can be cut for free.
+            //
+            // `max_key` matters too: the keys are combinatorial simplex indices
+            // bounded by C(n, dim+1), so a dense direct-indexed array is viable
+            // exactly when max_key is close to the key space size.
+            if std::env::var("CANNS_RIPSER_STATS").is_ok() {
+                let mut max_key: IndexT = -1;
+                for k in pivot_column_index.keys() {
+                    if *k > max_key {
+                        max_key = *k;
+                    }
+                }
+                eprintln!(
+                    "PIVOTSTATS dim={dim} len={} capacity={} key_space_hint={} max_key={} \
+                     density={:.6}",
+                    pivot_column_index.len(),
+                    pivot_column_index.capacity(),
+                    columns_to_reduce.len(),
+                    max_key,
+                    pivot_column_index.len() as f64 / (max_key.max(1) as f64 + 1.0)
                 );
             }
 
@@ -603,6 +752,7 @@ where
                     self.verbose,
                 );
 
+                let t_asm = std::time::Instant::now();
                 assembler.assemble_columns_to_reduce(
                     &mut simplices,
                     &mut columns_to_reduce,
@@ -610,15 +760,36 @@ where
                     dim + 1,
                     self.dim_max,
                 );
+                if ph_stats {
+                    ph_assemble_s += t_asm.elapsed().as_secs_f64();
+                }
 
                 if self.verbose {
                     eprintln!("DEBUG: Assemble complete for dim={}, simplices: {} -> {}, columns_to_reduce: {}",
                              dim + 1, old_simplices_len, simplices.len(), columns_to_reduce.len());
                 }
             }
+
+            crate::ripser::core::assembly::report_assembly_stats(dim + 1);
         }
         if self.verbose {
             eprintln!("DEBUG: compute_barcodes complete");
+        }
+        if ph_stats {
+            let wall = t_entry.elapsed().as_secs_f64();
+            let mb = |kb: u64| kb as f64 / 1024.0;
+            eprintln!(
+                "PHASESTATS wall={wall:.3} edges={ph_edges_s:.3} dim0={ph_dim0_s:.3} \
+                 reduce={ph_reduce_s:.3} assemble={ph_assemble_s:.3} \
+                 other={:.3} rss_start={:.0}MB rss_edges={:.0}MB rss_dim0={:.0}MB \
+                 rss_loop_pre={:.0}MB rss_end={:.0}MB",
+                (wall - ph_edges_s - ph_dim0_s - ph_reduce_s - ph_assemble_s).max(0.0),
+                mb(rss_start),
+                mb(rss_after_edges),
+                mb(rss_after_dim0),
+                mb(rss_before_loop),
+                mb(rss_kb())
+            );
         }
         Ok(())
     }
@@ -721,7 +892,7 @@ where
         &mut self,
         dim: IndexT,
         columns_to_reduce: &[DiameterIndexT],
-        pivot_column_index: &mut FxHashMap<IndexT, (usize, CoefficientT)>,
+        pivot_column_index: &mut FxHashMap<IndexT, PivotVal>,
     ) -> Result<bool, String> {
         if columns_to_reduce.is_empty() {
             return Ok(true);
@@ -754,7 +925,7 @@ where
         let mut columns: Vec<lockfree::LockFreeColumn> =
             Vec::with_capacity(columns_to_reduce.len());
         let mut emergent_flags = vec![false; columns_to_reduce.len()];
-        let mut lockfree_pivot_updates: Vec<(IndexT, (usize, CoefficientT))> = Vec::new();
+        let mut lockfree_pivot_updates: Vec<(IndexT, PivotVal)> = Vec::new();
         let mut lockfree_births: Vec<ValueT> = Vec::new();
 
         for (col_idx, simplex) in columns_to_reduce.iter().enumerate() {
@@ -810,7 +981,7 @@ where
                 }
                 lockfree_pivot_updates.push((
                     pivot.get_index(),
-                    (col_idx, modp(pivot.get_coefficient(), self.modulus)),
+                    PivotVal::new(col_idx, modp(pivot.get_coefficient(), self.modulus)),
                 ));
                 columns.push(lockfree::LockFreeColumn {
                     birth,
@@ -865,8 +1036,10 @@ where
                     lockfree_births.push(birth);
                     lockfree_births.push(death);
                 }
-                lockfree_pivot_updates
-                    .push((pivot.get_index(), (col_idx, pivot.get_coefficient())));
+                lockfree_pivot_updates.push((
+                    pivot.get_index(),
+                    PivotVal::new(col_idx, pivot.get_coefficient()),
+                ));
             } else {
                 lockfree_births.push(column.birth);
                 lockfree_births.push(f32::INFINITY);
@@ -922,7 +1095,7 @@ where
         let births_and_deaths = &mut self.births_and_deaths_by_dim[dim as usize];
         births_and_deaths.extend_from_slice(&lockfree_births);
         for (row, value) in lockfree_pivot_updates {
-            pivot_column_index.insert(row, value);
+            pivot_column_index.insert(row, value.into());
         }
 
         if should_report_progress {
@@ -948,8 +1121,8 @@ where
         &self,
         columns_to_reduce: &[DiameterIndexT],
         dim: IndexT,
-        pivot_seed: &FxHashMap<IndexT, (usize, CoefficientT)>,
-    ) -> Result<(Vec<(IndexT, (usize, CoefficientT))>, Vec<ValueT>), String> {
+        pivot_seed: &FxHashMap<IndexT, PivotVal>,
+    ) -> Result<(Vec<(IndexT, PivotVal)>, Vec<ValueT>), String> {
         let reducer = crate::ripser::core::MatrixReducer::new(
             &self.dist,
             self.n,
@@ -976,9 +1149,11 @@ where
             &mut births,
             &mut cocycles,
             false,
+            // the lockfree path rebuilds pairs from the map afterwards
+            true,
         );
 
-        let pairs: Vec<(IndexT, (usize, CoefficientT))> = pivot_map
+        let pairs: Vec<(IndexT, PivotVal)> = pivot_map
             .into_iter()
             .filter(|(row, _)| !pivot_seed.contains_key(row))
             .collect();
@@ -1044,5 +1219,46 @@ fn should_verify_lockfree() -> bool {
         )
     } else {
         cfg!(debug_assertions)
+    }
+}
+
+#[cfg(test)]
+mod sparse_representation_tests {
+    use super::use_sparse_representation;
+
+    /// The regression this rule exists for: a FULLY DENSE matrix whose largest
+    /// value is an artificial cap (the ASA pipeline's `M = 2*max_finite + 1`)
+    /// must stay on the dense path. Before the `has_non_finite` clause this
+    /// combination took the sparse path and ran 4.3x slower.
+    #[test]
+    fn dense_matrix_with_an_artificial_cap_stays_dense() {
+        let t = 200.287_496_5_f32;
+        let cap = 401.574_993_1_f32;
+        assert!(!use_sparse_representation(t, cap, false));
+    }
+
+    /// A matrix that really is missing pairs, with the threshold below the
+    /// largest finite distance, still takes the sparse path.
+    #[test]
+    fn matrix_with_missing_pairs_takes_the_sparse_path() {
+        let t = 200.287_496_5_f32;
+        let cap = 401.574_993_1_f32;
+        assert!(use_sparse_representation(t, cap, true));
+    }
+
+    /// A threshold at or above the largest finite distance never needs the
+    /// sparse representation, whatever the matrix looks like.
+    #[test]
+    fn threshold_at_or_above_max_finite_stays_dense() {
+        let t = 200.287_496_5_f32;
+        assert!(!use_sparse_representation(t, t, true));
+        assert!(!use_sparse_representation(t, t, false));
+        assert!(!use_sparse_representation(500.0, t, true));
+    }
+
+    /// An infinite `max_finite` makes the first clause vacuous.
+    #[test]
+    fn infinite_max_finite_stays_dense() {
+        assert!(!use_sparse_representation(200.0, f32::INFINITY, true));
     }
 }
