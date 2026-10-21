@@ -46,7 +46,35 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   both early exits are under the same switch, because a partly-on early exit
   is not an ablation but a third thing that no table describes.
 
+  **One comparison per distance read, not two.** The first clean measurement
+  of the switch found it made the 1,200-vertex ASA matrix 7% SLOWER, in
+  every repetition. The matrix is 2.9 MB and cache-resident, and it runs at
+  threshold = infinity, so the rejection test `d > threshold` could never
+  fire there and every one of those comparisons was pure overhead. The
+  enumerator now computes, once per matrix, the value a distance has to
+  reach for the cofacet to be rejected -- the next float above a finite
+  threshold, or infinity for an infinite one -- and one comparison then
+  covers both rejections, and the `-inf` case with them.
+
 ### Changed
+- **One measurement at a time.** The quiet-window gate counts the cores used
+  by processes that are NOT ours, so it cannot see two of OUR OWN
+  measurements colliding -- and that collision moves the numbers just as much
+  as a neighbour's job does. It happened: a measurement driver's parent was
+  stopped while its child kept running, and the child and an unrelated
+  measurement ran together for half an hour. Every measured run now takes an
+  exclusive lock on the box; a second measurement waits for the first rather
+  than running beside it.
+- **The corpus table's arm list has one definition.** It lived in two
+  places -- the corpus' own driver, which is in no repository because the
+  corpus pipeline's licence is still open, and the checker here -- and the
+  two copies were coupled by hand. The list is now
+  `harness/corpus_arms.py`, and the driver, the checker and the paper's
+  analysis script all read it. It also says what the arms are FOR: the
+  threshold is a table-level constant, every arm computes the same
+  filtration, and the arm with ripser++ at the cap threshold is deliberately
+  not in it, because it admits every pair in the file as a real edge and so
+  computes a different filtration.
 - **The quiet-window gate is now one implementation, used by seventeen of the
   nineteen checkers.** The benchmark host is shared, a neighbour's job moves
   the numbers by up to 40%, and it can flip a comparison's sign -- so a table
