@@ -34,7 +34,10 @@ THE RULES THIS FILE ENCODES
 """
 from __future__ import annotations
 
+import contextlib
 import csv
+import errno
+import fcntl
 import os
 import subprocess
 import sys
@@ -42,6 +45,66 @@ import time
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import foreign_cpu
+
+# THE MEASUREMENT LOCK.
+#
+# The quiet-window gate counts the cores used by processes that are NOT ours.
+# It therefore cannot see a collision between TWO OF OUR OWN measurements --
+# and that collision is just as capable of moving the numbers as a
+# neighbour's job is. It happened: a measurement driver's parent was stopped
+# while its child kept running, the child and an unrelated measurement ran
+# together for half an hour, and both sets of numbers were unusable.
+#
+# So every measured run takes an exclusive lock on this file. A second
+# measurement WAITS for the first to finish rather than running beside it.
+# The lock is per file descriptor, so a process that takes it twice does not
+# deadlock -- it is the second PROCESS that waits.
+LOCK_PATH = "/tmp/.canns_measurement.lock"
+
+
+@contextlib.contextmanager
+def measurement_lock(timeout=3600, label=""):
+    """Hold the box for the duration of one measurement.
+
+    The lock is an exclusive `flock` on a file, so it is released when the
+    process dies -- including when it is killed, which is what makes it safe
+    against a measurement whose parent was stopped: the child keeps the lock
+    it inherited, and the next measurement waits for it.
+
+    Waiting is the right behaviour and not a failure: two measurements on the
+    same box at the same time would both be wrong, and the second one is
+    better off waiting than being measured beside the first.
+    """
+    who = label or os.path.basename(sys.argv[0])
+    fd = os.open(LOCK_PATH, os.O_RDWR | os.O_CREAT, 0o666)
+    try:
+        deadline = time.time() + timeout
+        waited = False
+        while True:
+            try:
+                fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                break
+            except OSError as exc:
+                if exc.errno not in (errno.EAGAIN, errno.EACCES):
+                    raise
+                if time.time() > deadline:
+                    raise RuntimeError(
+                        "another measurement has held %s for more than %d s; "
+                        "refusing to run beside it"
+                        % (LOCK_PATH, timeout))
+                if not waited:
+                    waited = True
+                    print("  (waiting for the box: another measurement is "
+                          "running)", file=sys.stderr, flush=True)
+                time.sleep(2.0)
+        try:
+            os.ftruncate(fd, 0)
+            os.write(fd, ("%d %s\n" % (os.getpid(), who)).encode())
+            yield
+        finally:
+            fcntl.flock(fd, fcntl.LOCK_UN)
+    finally:
+        os.close(fd)
 
 # The benchmark host. The paths are the host's, not the laptop's: the
 # measurement runs there, and the laptop only holds the scripts.
@@ -125,16 +188,19 @@ def run_measured(argv, env=None, timeout=1800, cwd=None, tag=None, keep=False):
     out_path = "/tmp/_bench_%s.out" % unique
     err_path = "/tmp/_bench_%s.err" % unique
     with open(out_path, "w") as fo, open(err_path, "w") as fe:
-        with foreign_cpu.Probe() as probe:
-            t0 = time.perf_counter()
-            proc = subprocess.Popen(argv, stdout=fo, stderr=fe, env=child_env,
-                                    cwd=cwd)
-            try:
-                proc.wait(timeout=timeout)
-            except subprocess.TimeoutExpired:
-                proc.kill()
-                proc.wait()
-            wall = time.perf_counter() - t0
+        with measurement_lock(label=tag or "run"):
+            with foreign_cpu.Probe() as probe:
+                t0 = time.perf_counter()
+                proc = subprocess.Popen(argv, stdout=fo, stderr=fe, env=child_env,
+                                        cwd=cwd)
+                try:
+                    proc.wait(timeout=timeout)
+                except subprocess.TimeoutExpired:
+                    proc.kill()
+                    proc.wait()
+                wall = time.perf_counter() - t0
+                foreign = probe.record()
+                foreign_max = probe.record_max()
     with open(out_path) as fh:
         stdout = fh.read()
     with open(err_path) as fh:
@@ -143,7 +209,7 @@ def run_measured(argv, env=None, timeout=1800, cwd=None, tag=None, keep=False):
         os.unlink(out_path)
         os.unlink(err_path)
     return Measured(argv, stdout, stderr, proc.returncode, wall,
-                    probe.record(), probe.record_max(), env)
+                    foreign, foreign_max, env)
 
 
 def with_foreign(fn, *args, **kwargs):
@@ -162,9 +228,10 @@ def with_foreign(fn, *args, **kwargs):
     reports "" rather than 0.0, because "" means "we do not know" and 0.0
     would read as "the box was provably idle".
     """
-    with foreign_cpu.Probe() as probe:
-        result = fn(*args, **kwargs)
-    return result, probe.record(), probe.record_max()
+    with measurement_lock(label="run"):
+        with foreign_cpu.Probe() as probe:
+            result = fn(*args, **kwargs)
+        return result, probe.record(), probe.record_max()
 
 
 def quiet_enough(measured, gate=FOREIGN_GATE):

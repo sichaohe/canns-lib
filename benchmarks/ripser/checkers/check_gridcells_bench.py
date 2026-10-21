@@ -32,15 +32,15 @@ import sys
 import tempfile
 
 MATRIX_DIR = "/home/sichaohe/gridcells/matrices"
-# The corpus' own five arms, plus the FAIR ripser++ arm: the corpus runs
-# ripser++ with the cap as the threshold, and the T arm (the threshold at
-# the maximum finite distance) is the configuration a ripser++ user would
-# actually choose. At maxdim=1 the two are the same filtration -- the
-# threshold is the maximum finite distance, so every finite edge is in
-# both -- and the measured medians agree (0.620x against 0.631x).
-ARMS = [("canns-gpu", "inf_preserved"), ("canns-gpu", "capped"),
-        ("canns-cpu", "inf_preserved"), ("canns-cpu", "capped"),
-        ("ripserpp", "capped"), ("ripserpp_T", "capped")]
+
+# THE ARM LIST IS NOT WRITTEN HERE. It lives in `harness/corpus_arms.py`,
+# because the corpus' own driver reads it too -- and the driver is not in
+# this repository, so a copy in each place was a coupling by hand. The
+# driver imports from this repository (it already does, for foreign_cpu),
+# so a move here used to break it silently.
+sys.path.insert(0, os.path.join(
+    os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "harness"))
+from corpus_arms import ARMS
 
 REQUIRED = ["matrix", "target", "input_form", "wall_s", "peak_rss_kb",
             "bars_d0", "bars_d1", "h1_top3", "h1_md5", "ref_h1_top3",
