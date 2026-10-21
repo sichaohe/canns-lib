@@ -36,10 +36,10 @@ SSH="ssh -i $KEY -p $PORT -o ConnectTimeout=15 sichaohe@$HOST"
 
 # table : remote file : local name : checker : extra args
 TABLES=(
-  "scale_scan:/tmp/scale_clean.csv:scale_scan.csv:check_scale_scan.py:"
-  "unified_ablation:/tmp/unified_ablation_clean.csv:unified_ablation.csv:check_unified_ablation.py:"
-  "standard_bench:/tmp/standard_bench_5rep_clean.csv:standard_bench_5rep.csv:check_standard_bench.py:"
-  "std_cpu:/tmp/standard_bench_ripser_cpu_clean.csv:standard_bench_ripser_cpu.csv:check_standard_bench.py:--min-reps 1 --sides ripser_cpu --reference-side ripser_cpu"
+  "scale_scan:/tmp/scale_clean.csv:scale_scan.csv:checkers/check_scale_scan.py:"
+  "unified_ablation:/tmp/unified_ablation_clean.csv:unified_ablation.csv:checkers/check_unified_ablation.py:"
+  "standard_bench:/tmp/standard_bench_5rep_clean.csv:standard_bench_5rep.csv:checkers/check_standard_bench.py:"
+  "std_cpu:/tmp/standard_bench_ripser_cpu_clean.csv:standard_bench_ripser_cpu.csv:checkers/check_standard_bench.py:--min-reps 1 --sides ripser_cpu --reference-side ripser_cpu"
 )
 
 echo "=== the host's own account of the run ==="
@@ -80,8 +80,13 @@ for local in scale_batchA_1922.csv scale_batchB_1849.csv scale_scan.csv; do
 done
 if [ "${#COPIES[@]}" -ge 2 ]; then
     echo "--- comparing ${#COPIES[@]} independent copies of the scale scan"
-    python3 "$REPO/cross_batch.py" "${COPIES[@]}" \
-        --tolerance 0.05 --out "$DELIV/cross_batch.csv" 2>&1 | tail -4
+    # ON THE PROCESS CLOCK. The library clock is missing from one of the
+    # earlier copies -- that copy predates the column -- and a schema
+    # difference is not a disagreement about the numbers, so comparing it
+    # would report a failure that is not one. The process clock is in every
+    # copy.
+    python3 "$REPO/tools/cross_batch.py" "${COPIES[@]}" \
+        --tolerance 0.05 --columns wall_s --out "$DELIV/cross_batch.csv" 2>&1 | tail -4
 else
     echo "--- only ${#COPIES[@]} copy/copies of the scale scan: nothing to compare"
 fi
@@ -94,7 +99,7 @@ if $SSH "test -s /tmp/gca_results_clean.csv" 2>/dev/null; then
     scp -i "$KEY" -P "$PORT" "sichaohe@$HOST:/tmp/gca_results_clean.csv" \
         "$DELIV/gca_results_clean.csv" >/dev/null 2>&1
     echo "--- fetched gca_results_clean.csv ($(( $(wc -l < "$DELIV/gca_results_clean.csv") - 1 )) rows)"
-    $SSH 'cd ~/canns-lib-dev && source ~/miniconda3/etc/profile.d/conda.sh && conda activate rl && python benchmarks/ripser/check_gridcells_bench.py /tmp/gca_results_clean.csv --max-foreign-cpu 0.25 --self-test' 2>&1 | tail -14
+    $SSH 'cd ~/canns-lib-dev && source ~/miniconda3/etc/profile.d/conda.sh && conda activate rl && python benchmarks/ripser/checkers/check_gridcells_bench.py /tmp/gca_results_clean.csv --max-foreign-cpu 0.25 --self-test' 2>&1 | tail -14
 else
     echo "--- corpus table NOT PRODUCED"
 fi

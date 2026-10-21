@@ -107,7 +107,8 @@ def main():
     env["PATH"] = os.path.expanduser("~/.cargo/bin") + ":/usr/local/cuda/bin:" + env["PATH"]
     env["PYO3_PYTHON"] = PY
 
-    gate = os.path.join(repo, "benchmarks/ripser/sort_gate.py")
+    # the gate lives beside this script now (archive/)
+    gate = os.path.join(os.path.dirname(os.path.abspath(__file__)), "sort_gate.py")
     base_site = os.path.join(repo, "site_radix")
     if not os.path.isdir(base_site):
         raise SystemExit(f"missing baseline site {base_site}")
@@ -197,7 +198,8 @@ def main():
 
     print("\n=== negative self-test summary ===")
     bad = 0
-    csv_path = os.path.join(repo, "benchmarks/ripser/sort_neg_results.csv")
+    csv_path = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                             "sort_neg_results.csv")
     with open(csv_path, "w", newline="") as f:
         import csv as _csv
         w = _csv.writer(f)

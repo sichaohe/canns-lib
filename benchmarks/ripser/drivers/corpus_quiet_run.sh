@@ -90,7 +90,7 @@ for i in $(seq 1 1440); do
         if batch_is_clean "$OUT"; then
             echo "$(date +%Y-%m-%dT%H:%M:%S) clean: $OUT" >> "$LOG"
             # the checker needs the corpus, so it runs where the corpus is
-            python3 benchmarks/ripser/check_gridcells_bench.py "$OUT" \
+            python3 benchmarks/ripser/checkers/check_gridcells_bench.py "$OUT" \
                 --max-foreign-cpu "$MAX_FOREIGN" --self-test \
                 > /tmp/gca_clean_check.log 2>&1
             echo "$(date +%Y-%m-%dT%H:%M:%S) checked: $OUT" >> "$LOG"

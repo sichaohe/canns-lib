@@ -86,7 +86,7 @@ ARMS = [
 
 # The shipping build, and the two variants that differ from it by exactly
 # one cargo feature. The variants are built by
-# `benchmarks/ripser/build_abl_variants.sh`.
+# `benchmarks/ripser/drivers/build_abl_variants.sh`.
 VARIANTS = [
     ("all_on", "shipping", "/home/sichaohe/canns-lib-dev/site_ship6"),
     ("heap_off", "binary-heap", "/home/sichaohe/canns-lib-dev/site_abl_heapoff"),
