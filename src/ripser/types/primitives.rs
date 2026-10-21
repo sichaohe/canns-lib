@@ -160,7 +160,7 @@ impl PartialOrd for DiameterEntryT {
 //
 // UNVERIFIED IN THE CURRENT DELIVERY: that measurement has no table behind
 // it. See the same note in Cargo.toml, and the re-measurement in
-// `benchmarks/ripser/unified_ablation.py`.
+// `benchmarks/ripser/harness/unified_ablation.py`.
 //
 // The `binary-heap` feature restores `std::collections::BinaryHeap` (it is the
 // opt-OUT now). The two heaps are verified to yield the SAME pop order by

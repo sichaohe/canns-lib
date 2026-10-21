@@ -22,6 +22,6 @@ cd /tmp/wh_ship && for w in *.whl; do unzip -o -q "$w" -d ~/canns-lib-dev/site_s
 cd ~/canns-lib-dev
 echo "BUILT site_ship"
 
-python benchmarks/ripser/clean_h2h.py \
+python benchmarks/ripser/harness/clean_h2h.py \
   --out /home/sichaohe/ph_work/clean_h2h.csv --reps 3
 echo "H2H DONE"

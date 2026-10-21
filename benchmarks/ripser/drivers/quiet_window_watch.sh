@@ -124,20 +124,20 @@ for i in $(seq 1 1440); do
     if [ "$quiet" -ge 3 ]; then
         echo "$(date +%Y-%m-%dT%H:%M:%S) window is quiet -- starting" >> "$LOG"
         if measure /tmp/scale_clean.csv /tmp/scale_clean.log \
-             python benchmarks/ripser/scale_scan.py --sizes 1200,1600,2000 \
+             python benchmarks/ripser/harness/scale_scan.py --sizes 1200,1600,2000 \
              --timeout 600 --out /tmp/scale_clean.csv; then
-            bash benchmarks/ripser/build_abl_variants.sh > /tmp/abl_variants_build.log 2>&1
+            bash benchmarks/ripser/drivers/build_abl_variants.sh > /tmp/abl_variants_build.log 2>&1
             echo "$(date +%Y-%m-%dT%H:%M:%S) ablation variants built" >> "$LOG"
             measure /tmp/unified_ablation_clean.csv /tmp/unified_ablation_clean.log \
-                python benchmarks/ripser/unified_ablation.py --reps 3 \
+                python benchmarks/ripser/harness/unified_ablation.py --reps 3 \
                 --out /tmp/unified_ablation_clean.csv
             echo "$(date +%Y-%m-%dT%H:%M:%S) unified ablation done" >> "$LOG"
             measure /tmp/standard_bench_5rep_clean.csv /tmp/standard_bench_5rep_clean.log \
-                python benchmarks/ripser/standard_bench.py --sides pp_gpu,gpu,cpu \
+                python benchmarks/ripser/harness/standard_bench.py --sides pp_gpu,gpu,cpu \
                 --reps 5 --timeout 600 --out /tmp/standard_bench_5rep_clean.csv
             echo "$(date +%Y-%m-%dT%H:%M:%S) standard suite (5 reps) done" >> "$LOG"
             measure /tmp/standard_bench_ripser_cpu_clean.csv /tmp/standard_bench_ripser_cpu_clean.log \
-                python benchmarks/ripser/standard_bench.py --sides ripser_cpu \
+                python benchmarks/ripser/harness/standard_bench.py --sides ripser_cpu \
                 --reps 2 --timeout 900 --out /tmp/standard_bench_ripser_cpu_clean.csv
             echo "$(date +%Y-%m-%dT%H:%M:%S) reference CPU baseline done" >> "$LOG"
         else

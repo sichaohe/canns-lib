@@ -7,6 +7,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+- **The benchmark harness is a tree now.** `benchmarks/ripser/` held 81 files in
+  one flat directory: 18 runners, 2 libraries they import, 18 checkers, 7
+  renderers, 7 shell helpers, 3 patches, 10 probes, 3 tables and 3 documents.
+  It is now `harness/` (the runners, with the libraries they import beside
+  them), `checkers/` (one per table), `drivers/` (the shell helpers),
+  `tools/` (the things that work on tables rather than produce them),
+  `patches/` and `archive/` (the probes that answered a question once). A
+  runner and the library it imports stay in the same directory, so the
+  imports work wherever the tree is checked out; the checkers import nothing
+  from each other, so they can still be read one at a time. Every checker
+  derives its grid from its table and carries negative self-tests, and that
+  is unchanged: the same command on the same table produces the same output
+  as before the move, byte for byte.
+- **A checker was added for the reduction-split table.** `check_reduce_split.py`
+  is named in the report and in the renderer, and it did not exist -- so
+  "the two implementations do the same work", which rests entirely on that
+  table, was an unguarded claim. It now is a guarded one: the four count
+  columns (columns reduced, rounds, peak coboundary heap, most rounds in one
+  column) must be identical between the two sides, and five negative
+  self-tests make sure a doctored copy is rejected.
+- **`p21_gate.sh` is archived, not deleted.** It called `compare_p4.py`, which
+  does not exist in this repository, so it could not run. It is in
+  `archive/` with a note saying so.
+
 ### Fixed
 - **The ripser distance-matrix path no longer takes the sparse route on a dense matrix.** `rips_dm_with_callback_and_interval` switched to the sparse distance matrix whenever `threshold < max_finite`. Any pipeline that replaces missing (`+inf`) distances with a finite cap — the ASA pipeline caps them at `2*max_finite + 1` — therefore raised `max_finite` to the cap, and every threshold below the cap satisfied the condition, so an ordinary dense matrix was walked down the sparse path. In this implementation the sparse path is the slower one: the walk counters and the barcode are identical on both routes, but the sparse arm took 4.3x as long, because the dense enumerator rejects a capped pair with a single comparison while the sparse enumerator walks adjacency lists. The decision now requires the matrix to actually contain missing pairs. Measured on the 1200x1200 ASA matrix: the capped arm went from 49.419 s to 11.979 s, the other three arms were unchanged.
 
@@ -14,7 +39,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **The GPU apparent pre-pass no longer copies the column indices twice.** The kernel needs the simplex index of every column, and the host holds it inside 16-byte records, so the indices were gathered out into a `Vec<i64>` and then copied AGAIN by `cols.to_vec()` on the way into the driver (which keeps that copy as the device slice's host buffer). Measured at dim=2 on the 1200x1200 ASA matrix: the serial gather cost 0.25 s, the second copy 0.23 s, and the PCIe transfer they fed 0.077 s -- two thirds of the cost of getting 807 MB to the GPU was host-side copying. The gather is now parallel and the second copy is gone: the vector is moved into the device slice, so the driver reads it in place. The pre-pass goes from 0.667 s to 0.236 s, the barcode is byte-identical, and the head-to-head against ripser++ goes from 1.050x to 0.918x.
 - **The reduction's working column store keeps one bound per NON-EMPTY column.** The store used to hold one `u32` per ENUMERATED column -- the end offset of that column's entries -- and `append_column` ran once per enumerated column: 286,562,199 times at dim=2 on the 1200x1200 ASA matrix. That is 1.15 GB of bounds at dim=2 (403 MB at the T threshold), and every one of those entries was equal to its predecessor's, because the overwhelming majority of the columns are apparent pairs and store nothing at all. The store now keeps one `(column, end offset)` pair per non-empty column -- 298,670 of them at dim=2, 2.4 MB -- and finds a column's range with a binary search. The semantics are unchanged (`subrange(c)` returns exactly the entries pushed while column `c` was being processed, and an empty column returns an empty range), and the barcode is byte-identical on every arm of the head-to-head. Measured on the ASA matrix, three interleaved repetitions per arm: 1.1% to 2.0% faster on all four arms, and the peak resident set drops by 382 MB (T threshold) to 1.06 GB (cap threshold).
 - **The reduction's working column heap is now a hand-rolled `CoboundaryHeap`.** `std::collections::BinaryHeap::pop` uses `sift_down_to_bottom`, which always walks the hole to the bottom of the tree. A single column's coboundary heap grows to 9-11 million entries (148-185 MB) before it is drained, so the bottom of the tree is a cold cache line on every pop; ripser++ uses `std::priority_queue`, whose `pop` is the classic top-down sift-down with an early exit. The new heap implements that variant and is the default; the `binary-heap` cargo feature restores `BinaryHeap`. Measured on the ASA matrix: 6.5% faster on the `+inf` input and 6.9% faster on the capped input, three interleaved repetitions each, with a byte-identical barcode.
-  **Unverified in the current delivery**: that run was not kept, so the percentages cannot be pointed at a row of a table. They are re-measured by `benchmarks/ripser/unified_ablation.py`, which turns this one switch off and nothing else; until that table exists, treat them as a claim. The unit test `pop_order_matches_binary_heap` pins the pop order against `BinaryHeap`, and `pops_in_reduction_order` pins the reduction order.
+  **Unverified in the current delivery**: that run was not kept, so the percentages cannot be pointed at a row of a table. They are re-measured by `benchmarks/ripser/harness/unified_ablation.py`, which turns this one switch off and nothing else; until that table exists, treat them as a claim. The unit test `pop_order_matches_binary_heap` pins the pop order against `BinaryHeap`, and `pops_in_reduction_order` pins the reduction order.
 - **The modulus cancellation in the reduction no longer divides.** The two coefficients are always smaller than the modulus, so a single conditional subtraction replaces the integer division. The coefficients are also summed in `i32` rather than `i16`; the old `i16` addition overflowed for a modulus above 16383.
 - **`import canns_lib` no longer imports scikit-learn eagerly.** `sklearn.metrics.pairwise.pairwise_distances` is only needed when the caller passes points instead of a distance matrix, and importing it at module scope cost 0.96 s on every import.
 - **Maturin builds now enable the `hugepage` cargo feature** on Linux. It marks allocations of 2 MB or more with `MADV_HUGEPAGE`, which is worth 1.24x end to end on the real ASA workload (119.4 s -> 96.0 s, three interleaved passes, bitwise-identical barcode on all 224 regression cells) because the pivot map is a single ~13 GB allocation whose insert cost is dominated by page faults and TLB misses rather than hashing. It is a no-op on non-Linux. Build with `--no-default-features` to opt out.

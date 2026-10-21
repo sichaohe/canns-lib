@@ -14,22 +14,30 @@
 # d41d8cd98f00b204e9800998ecf8427e.
 #
 # USAGE
-#     bash benchmarks/ripser/sync_to_server.sh
+#     bash benchmarks/ripser/drivers/sync_to_server.sh
 set -euo pipefail
 
 HOST=${CANNS_BENCH_HOST:-222.29.101.57}
 PORT=${CANNS_BENCH_PORT:-1693}
 KEY=${CANNS_BENCH_KEY:-$HOME/.ssh/sichaohe_key}
-SRC=$(cd "$(dirname "$0")" && pwd)
+# this script lives in `drivers/`, so the tree it syncs is its parent
+SRC=$(cd "$(dirname "$0")/.." && pwd)
 DST=${CANNS_BENCH_DIR:-/home/sichaohe/canns-lib-dev/benchmarks/ripser}
 
-FILES="scale_scan.py standard_bench.py unified_ablation.py t_arm_equivalence.py \
-foreign_cpu.py quiet_window_watch.sh cross_batch.py o3_profile.py o3_cpu_scaling.py clean_h2h.py h2h_coeff_ab.py check_h2h_coeff_ab.py \
-corpus_quiet_run.sh \
-check_scale_scan.py check_standard_bench.py check_unified_ablation.py \
-check_gridcells_bench.py check_clean_h2h.py check_nsfix_ab.py \
-check_bounds_ab.py check_validate_gridcells.py check_characterize_gridcells.py \
-check_o3_profile.py"
+# The paths are relative to the tree, so a file in `checkers/` is listed as
+# `checkers/check_x.py` and lands in the same subdirectory on the host.
+FILES="harness/scale_scan.py harness/standard_bench.py harness/unified_ablation.py \
+harness/t_arm_equivalence.py harness/foreign_cpu.py harness/o3_profile.py \
+harness/o3_cpu_scaling.py harness/clean_h2h.py harness/h2h_coeff_ab.py \
+drivers/quiet_window_watch.sh drivers/corpus_quiet_run.sh \
+tools/cross_batch.py \
+checkers/check_scale_scan.py checkers/check_standard_bench.py \
+checkers/check_unified_ablation.py checkers/check_gridcells_bench.py \
+checkers/check_clean_h2h.py checkers/check_nsfix_ab.py \
+checkers/check_bounds_ab.py checkers/check_validate_gridcells.py \
+checkers/check_characterize_gridcells.py checkers/check_o3_profile.py \
+checkers/check_o3_cpu_scaling.py checkers/check_h2h_coeff_ab.py \
+checkers/check_reduce_split.py"
 
 SSH="ssh -i $KEY -p $PORT -o ConnectTimeout=15 sichaohe@$HOST"
 
@@ -46,7 +54,9 @@ for f in $FILES; do
     fi
     local_md5=$(md5 -q "$SRC/$f")
     # the write and the move are one command, and the move is atomic: the
-    # target is never observed half-written
+    # target is never observed half-written. The subdirectory has to exist
+    # on the host first, or the move fails and the file is left in /tmp.
+    $SSH "mkdir -p $(dirname "$DST/$f")"
     cat "$SRC/$f" | $SSH "cat > /tmp/_sync_one && mv /tmp/_sync_one $DST/$f"
     # The md5 and the size come back as two LINES, and `read` stops at the
     # first newline -- so the size was silently empty, the "landed empty"

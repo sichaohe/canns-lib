@@ -11,6 +11,23 @@ characterisation". The scripts, the checkers and the aggregate characterisation
 are here; the per-matrix tables live in the artefact, and will move here when
 the licence question is answered.
 
+## The layout
+
+```
+benchmarks/ripser/
+├── harness/     the runners that produce a table, and the two libraries they import
+├── checkers/    one checker per table
+├── drivers/     the shell helpers: sync, fetch, watch for a quiet window, build
+├── tools/       the things that work on tables rather than produce them
+├── patches/     patches applied to a COPY of ripser++, to instrument it
+├── archive/     the probes that answered a question once
+└── (the rest)   what came with the repository, and three tables
+```
+
+A runner and the library it imports live in the same directory, so the
+imports work wherever the tree is checked out; the checkers import nothing
+from each other, so they can be read one at a time.
+
 ## The rules
 
 1. **One script produces one table, one checker checks one table.** A table
@@ -35,10 +52,10 @@ the licence question is answered.
    that produces the tables discards a whole batch rather than keeping half
    of it. A second, independent line of evidence is that the same table is
    measured twice on a quiet host and the copies are compared cell by cell
-   (`cross_batch.py`): a neighbour's job would not make two independent
+   (`tools/cross_batch.py`): a neighbour's job would not make two independent
    measurements agree.
 
-## The harness
+## The harness (`harness/`)
 
 | runner | what it measures | checker |
 |---|---|---|
@@ -55,37 +72,42 @@ the licence question is answered.
 | `bounds_gridcells_ab.py` | the column-store A/B on the corpus | `check_bounds_ab.py` |
 | `apparent_bench.py` | the apparent-pair equivalence | `check_apparent_bench.py` |
 | `gap_analysis.py` | same-batch gap accounting, stage by stage | `check_gap.py` |
-| `determinism_check.py` | run-to-run reproducibility of both sides | — |
-| `cpu_baseline_giotto.py` | the CPU baseline against giotto-ph's multi-process Ripser | — |
+| `h2h_coeff_ab.py` | the coefficient field, settled by an interleaved A/B | `check_h2h_coeff_ab.py` |
+| `o3_profile.py` | where the time goes on the instance we lose on | `check_o3_profile.py` |
+| `o3_cpu_scaling.py` | the same instance at 1, 2, 4 and 16 threads | `check_o3_cpu_scaling.py` |
+| `determinism_check.py` | run-to-run reproducibility of both sides | -- |
+| `cpu_baseline_giotto.py` | the CPU baseline against giotto-ph's multi-process Ripser | -- |
 | `gca_bench.py` (in the corpus, not in this repository) | the grid-cells main benchmark | `check_gridcells_bench.py` |
 
+Every checker lives in `checkers/`, with the same name as the runner it
+guards. `check_reduce_split.py` is the one that has no runner of its own: it
+guards the table that compares the two implementations' reduction, and it
+is the check that makes "both sides do the same work" a fact rather than a
+claim.
+
 Called by the runners: `h2h_child.py` (one measured run of our ripser, used
-by `final_h2h.py`, `gap_analysis.py`, `loop_probe.py`, `onepass_ab.py` and
-`two_site_ab.py`) and `apparent_fixtures.py` (the fixtures for
-`apparent_bench.py`).
+by `final_h2h.py`, `gap_analysis.py` and the archived probes) and
+`apparent_fixtures.py` (the fixtures for `apparent_bench.py`).
 
 Called by every runner that measures time: `foreign_cpu.py`. It reads every
 process's CPU time from `/proc`, sums the ones owned by another user, and
 hands the runner the number of cores that somebody else was using while
 the row was measured. It is what the quiet-window gate is applied to.
 
-Run by hand: `make_ripserpp_input.py` (writes the input file for ripser++),
-`merge_scale_scan.py` (merges the passes of a scale scan into one table)
-and `cross_batch.py` (compares two copies of the same table cell by cell --
-the second, independent line of evidence that the host was quiet).
-
-Run the whole chain: `quiet_window_watch.sh` waits for a quiet window and
-then runs the scale scan, the ablation, the standard suite, the CPU
-baseline, discarding any batch whose rows were
-measured while somebody else was using the host. `corpus_quiet_run.sh` does
-the same for the corpus benchmark, whose driver is not in this repository.
-
 `cpu_baseline_giotto.py` has no checker because it could not be run: giotto-ph
 does not install in the benchmark environment (its wheel unpacks to a
 dist-info only, and `import giotto` fails). The table it writes records the
 failure in the `giotto_error` column rather than an empty number.
 
-## Rendering the paper's sections from the tables
+## The tools (`tools/`)
+
+Run by hand: `make_ripserpp_input.py` (writes the input file for ripser++),
+`merge_scale_scan.py` (merges the passes of a scale scan into one table),
+`cross_batch.py` (compares two copies of the same table cell by cell -- the
+second, independent line of evidence that the host was quiet) and
+`reduce_split.py` (our reduction against ripser++'s, split by stage).
+
+## Rendering the paper's sections from the tables (`tools/`)
 
 `render_characterization_section.py` writes the load-characterisation section
 from the characterisation table; `summarize_characterization.py` reduces that
@@ -95,24 +117,7 @@ the two figures; `render_clean_md.py`, `render_final_md.py`,
 `write_provenance_sidecar.py` adds the build identity to a table that predates
 the provenance columns.
 
-## Probes and one-off diagnostics
-
-These answered a question once. They are kept because the answer is in the
-papers and the report, and because a claim that cannot be re-run is a claim
-that cannot be checked. They are not tables, and most of them have no checker.
-
-| script | the question it answered |
-|---|---|
-| `inf_form_probe.py` | what exactly differs between the `+inf`-preserved and the capped input |
-| `thresh_probe.py` | whether the 30% `+inf` in the ASA matrix is actually costing us |
-| `loop_probe.py` | how the reducing columns are actually reduced, from the counters |
-| `sparse_paths.py` | three ways to read the same 30%-`inf` matrix |
-| `reduce_split.py` | our reduction against ripser++'s, split by stage |
-| `sort_gate.py`, `sort_neg_test.py` | the gate for the GPU radix sort, and its negative self-test |
-| `two_site_ab.py`, `onepass_ab.py`, `pinned_cache_ab.py` | A/Bs between two builds, in one interleaved batch |
-| `patch_heap_probe.py`, `patch_pushpop.py`, `patch_reduce_profile.py` | patches applied to a COPY of ripser++ to instrument it |
-
-## Shell helpers
+## The shell helpers (`drivers/`)
 
 | script | what it does |
 |---|---|
@@ -121,7 +126,29 @@ that cannot be checked. They are not tables, and most of them have no checker.
 | `build_abl_variants.sh` | builds the ablation variants, each into its own directory |
 | `quiet_window_watch.sh` | waits for a quiet window, then measures, and discards a contaminated batch |
 | `fetch_clean_tables.sh` | fetches the quiet-window tables and checks each one |
-| `p21_gate.sh` | the gate for the auto-sparse switch: on against off, over the full regression grid |
+| `corpus_quiet_run.sh` | the same, for the corpus benchmark, whose driver is not in this repository |
+
+## The probes (`archive/`)
+
+These answered a question once. They are kept because the answer is in the
+papers and the report, and because a claim that cannot be re-run is a claim
+that cannot be checked. They are not tables, and most of them have no
+checker.
+
+| script | the question it answered |
+|---|---|
+| `inf_form_probe.py` | what exactly differs between the `+inf`-preserved and the capped input |
+| `thresh_probe.py` | whether the 30% `+inf` in the ASA matrix is actually costing us |
+| `loop_probe.py` | how the reducing columns are actually reduced, from the counters |
+| `sparse_paths.py` | three ways to read the same 30%-`+inf` matrix |
+| `sort_gate.py`, `sort_neg_test.py` | the gate for the GPU radix sort, and its negative self-test |
+| `two_site_ab.py`, `onepass_ab.py`, `pinned_cache_ab.py` | A/Bs between two builds, in one interleaved batch |
+| `h2h_child.py` | one measured run of our ripser, used by the probes |
+| `p21_gate.sh` | the gate for the auto-sparse switch. **Archived because it is broken**: it calls `compare_p4.py`, which does not exist in this repository, so it cannot run |
+
+The three `patch_*.py` scripts are in `patches/`, not here: they are applied
+to a COPY of ripser++ to instrument it, and they are used by the probes and
+by the reduction comparison, so they are kept where they can be run.
 
 ## The paper's drafts
 
@@ -135,8 +162,9 @@ a reader of the paper should start from.
 
 The drafts (the story, the abstract, the introduction, the
 load-characterisation section generated by
-`render_characterization_section.py`, and the tables they are views of)
-live in a separate project repository, beside the raw tables themselves.
+`tools/render_characterization_section.py`, and the tables they are views
+of) live in a separate project repository, beside the raw tables
+themselves.
 
 ## What came with the repository
 
