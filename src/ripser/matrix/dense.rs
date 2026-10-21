@@ -498,15 +498,7 @@ impl<const LOWER: bool> HasCofacets for CompressedDistanceMatrix<LOWER> {
         modulus: CoefficientT,
         threshold: ValueT,
     ) -> Self::Enumerator<'a> {
-        SimplexCoboundaryEnumerator::new(
-            simplex,
-            dim,
-            n,
-            self,
-            binomial_coeff,
-            modulus,
-            threshold,
-        )
+        SimplexCoboundaryEnumerator::new(simplex, dim, n, self, binomial_coeff, modulus, threshold)
     }
 }
 

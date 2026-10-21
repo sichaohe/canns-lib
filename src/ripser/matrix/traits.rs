@@ -70,14 +70,7 @@ pub trait HasCofacets: DistanceMatrix {
     where
         Self: Sized,
     {
-        Box::new(self.cofacet_enumerator(
-            simplex,
-            dim,
-            n,
-            binomial_coeff,
-            modulus,
-            threshold,
-        ))
+        Box::new(self.cofacet_enumerator(simplex, dim, n, binomial_coeff, modulus, threshold))
     }
 }
 
