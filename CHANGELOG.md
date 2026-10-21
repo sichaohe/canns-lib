@@ -7,7 +7,45 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Performance
+- **The cofacet enumerator stops reading distances for a cofacet the threshold
+  already rejects.** The enumerator used to read all `dim + 1` distances of a
+  candidate cofacet before the caller could reject it on the threshold. On
+  `o3_4096` (4,096 points, threshold 1.4) only 1.3% of the candidates are under
+  the threshold, so 98.7% of the distance reads were spent on cofacets that
+  were thrown away -- and each of those reads is a scattered miss into a
+  33.5 MB matrix. The threshold is now passed into the enumerator and the read
+  loop stops as soon as the running maximum is above it; the true diameter is
+  at least the running maximum, so such a cofacet is rejected either way, and
+  all seven call sites filter on the threshold before they use the diameter.
+
+  Measured on one binary, the two arms selected by `CANNS_RIPSER_COFACET_EARLY_EXIT`,
+  interleaved, with the per-dimension reduction rounds identical in both arms
+  (51,267 / 111,105 / 178,067) and the barcode unchanged:
+
+  | dim | early exit off | early exit on |
+  |---|---|---|
+  | 1 | 12.52 s | 6.11 s |
+  | 2 | 22.95 s | 8.23 s |
+  | 3 | 62.40 s | 22.30 s |
+
+  The win is in the regime where the matrix does not fit in cache: on the
+  1,200-vertex ASA matrix, which is 2.9 MB and is run at threshold = infinity,
+  the two arms are within 0.5% of each other.
+
+  `CANNS_RIPSER_COFACET_EARLY_EXIT=0` restores the old behaviour exactly --
+  both early exits are under the same switch, because a partly-on early exit
+  is not an ablation but a third thing that no table describes.
+
 ### Changed
+- **The benchmark harness has a shared core.** `harness/bench_core.py` holds
+  the parts every runner does the same way: the host's paths and interpreter,
+  the foreign-load-measured child runner, the parsers for the build's own
+  instrumentation, the CSV writer, the wrong-library guard, and the build
+  identity. They had been re-implemented in every runner, and the copies had
+  drifted -- two `provenance()` functions with different bodies, four parsers
+  with different names. The parent README now has a recipe for adding an
+  experiment.
 - **The benchmark harness is a tree now.** `benchmarks/ripser/` held 81 files in
   one flat directory: 18 runners, 2 libraries they import, 18 checkers, 7
   renderers, 7 shell helpers, 3 patches, 10 probes, 3 tables and 3 documents.
@@ -43,6 +81,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **The modulus cancellation in the reduction no longer divides.** The two coefficients are always smaller than the modulus, so a single conditional subtraction replaces the integer division. The coefficients are also summed in `i32` rather than `i16`; the old `i16` addition overflowed for a modulus above 16383.
 - **`import canns_lib` no longer imports scikit-learn eagerly.** `sklearn.metrics.pairwise.pairwise_distances` is only needed when the caller passes points instead of a distance matrix, and importing it at module scope cost 0.96 s on every import.
 - **Maturin builds now enable the `hugepage` cargo feature** on Linux. It marks allocations of 2 MB or more with `MADV_HUGEPAGE`, which is worth 1.24x end to end on the real ASA workload (119.4 s -> 96.0 s, three interleaved passes, bitwise-identical barcode on all 224 regression cells) because the pivot map is a single ~13 GB allocation whose insert cost is dominated by page faults and TLB misses rather than hashing. It is a no-op on non-Linux. Build with `--no-default-features` to opt out.
+
+### Removed
+- **Eleven one-off probes left the benchmark tree.** `benchmarks/ripser/archive/`
+  held probes that had answered a question once and guarded nothing since:
+  `inf_form_probe.py`, `thresh_probe.py`, `loop_probe.py`, `sparse_paths.py`,
+  `two_site_ab.py`, `onepass_ab.py`, `pinned_cache_ab.py`, `h2h_child.py` and
+  `p21_gate.sh`. The rule is now written down in the parent README: a file in
+  this repository has to be a runner, a library, a driver, a tool or a patch,
+  and a probe whose question is answered is none of those. They were not
+  deleted -- they are in the paper project's process record and in this
+  repository's git history. `h2h_child.py` was a copy of a file that lives in
+  the paper project, and the runners that used it pointed at the copy there,
+  so nothing ever ran this one; `p21_gate.sh` called `compare_p4.py`, which
+  does not exist in this repository, so it could not run at all.
+  `phase_baseline.py` and `progress_bar_impact.py` left the tree for the same
+  reason, and `benchmarks/ripser/analysis/` (one sample PNG) with them.
+- **`comprehensive_benchmark.py` and `analysis_results.py` moved into the
+  tree.** They were sitting in `benchmarks/ripser/`'s top level; the first is
+  a runner and the second is a tool, so they are now `harness/` and `tools/`.
+  The repository's own README attributes its headline performance numbers to
+  the first one, so it is part of the method and it is kept -- only its
+  address changed.
 
 ### Added
 - **`gpu` cargo feature** — an opt-in GPU apparent-pair pre-pass, off by default and **not in the release build**: `[tool.maturin]` enables only `parallel`, `hugepage` and `extension-module`, so the published wheels contain no CUDA code at all and the pre-pass runs on the CPU. The GPU pre-pass is a build, not a download: `maturin develop --release --features parallel,hugepage,extension-module,gpu` (keep `extension-module` — it is what makes PyO3 produce a cdylib for Python). The build needs no CUDA toolkit: `build.rs` compiles `kernel/ripser_kernels.cu` with `nvcc` and embeds the cubin when a toolkit is present, and the driver JIT-compiles the same file through NVRTC when it is not. A run with no usable device falls back to the CPU pre-pass, and the barcode does not change. Measured on an A100-SXM4-80GB with the same 2.9e8 columns as the ASA matrix: the CPU pre-pass takes 12.0-15.5 s against 0.093 s for the GPU kernel plus 0.095 s for the pinned readback.

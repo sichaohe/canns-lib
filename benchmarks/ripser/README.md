@@ -1,8 +1,8 @@
 # `benchmarks/ripser`
 
 The ripser benchmark harness: the runners that produce a table, the checkers
-that decide whether the table is any good, and the probes that answered a
-question once and are kept for the record.
+that decide whether the table is any good, and the drivers that move the
+whole thing between a laptop and a shared benchmark host.
 
 The tables themselves are **not** in this repository. Two of them are computed
 from a grid-cell corpus whose licence is not settled, and a table that names
@@ -11,22 +11,55 @@ characterisation". The scripts, the checkers and the aggregate characterisation
 are here; the per-matrix tables live in the artefact, and will move here when
 the licence question is answered.
 
+## What may live in this repository, and what may not
+
+This used to be decided by history, which is how a repository ends up with
+eighty-one files in one directory and no way to tell which of them still
+matter. It is decided by this rule now:
+
+> A file may live here if it is one of five things:
+>
+> 1. **a runner** that produces a table the paper quotes, and that table has
+>    a checker;
+> 2. **a library** that a runner imports;
+> 3. **a driver** that moves data between the laptop and the benchmark host;
+> 4. **a tool** that works on tables (renders, merges, compares) and is still
+>    used;
+> 5. **a patch** applied to a *copy* of a reference implementation, still
+>    used.
+>
+> Everything else -- a probe whose question has been answered and recorded --
+> **does not live here**. It moves to the paper project's process record
+> (`ph_work/history/scripts/`), where "how we got here" belongs, and it is
+> deleted from this repository.
+
+The reason is not tidiness. This repository is the paper's **artefact**: a
+reader who comes here to reproduce a number has to be able to tell what is
+part of the method and what is a leftover. Every file here is either
+something they should run, or something they should read to understand why
+the method is shaped that way. A probe that answered a question in March and
+will never answer it again is neither, and a reader who has to work out which
+is which has been handed the wrong repository.
+
+The process record is not lost. It is in the paper project, and it is in this
+repository's git history.
+
 ## The layout
 
 ```
 benchmarks/ripser/
-├── harness/     the runners that produce a table, and the two libraries they import
+├── harness/     the runners that produce a table, and the libraries they import
 ├── checkers/    one checker per table
-├── drivers/     the shell helpers: sync, fetch, watch for a quiet window, build
+├── drivers/     the shell helpers: sync, build, watch for a quiet window, fetch
 ├── tools/       the things that work on tables rather than produce them
 ├── patches/     patches applied to a COPY of ripser++, to instrument it
-├── archive/     the probes that answered a question once
+├── archive/     the probes that still guard something
 └── (the rest)   what came with the repository, and three tables
 ```
 
 A runner and the library it imports live in the same directory, so the
 imports work wherever the tree is checked out; the checkers import nothing
-from each other, so they can be read one at a time.
+from each other, so they can still be read one at a time.
 
 ## The rules
 
@@ -46,7 +79,7 @@ from each other, so they can be read one at a time.
    benchmark host is shared, a concurrent job moves the numbers by up to 40%,
    and it can flip a comparison's sign. The gate is the **foreign CPU load**
    -- the cores used by other users' processes, read from `/proc` while the
-   row was measured -- and not the load average, which counts the
+   row was being measured -- and not the load average, which counts the
    measurement itself and therefore cannot separate our own work from
    somebody else's. The checkers take `--max-foreign-cpu`, and the watcher
    that produces the tables discards a whole batch rather than keeping half
@@ -55,26 +88,80 @@ from each other, so they can be read one at a time.
    (`tools/cross_batch.py`): a neighbour's job would not make two independent
    measurements agree.
 
+## How to add an experiment
+
+This is the part that is supposed to make the tree reusable. A new
+measurement is four steps, and the first three are the same for every
+experiment, so they live in one place.
+
+**1. Write the runner.** Import `bench_core` and use it for everything the
+harness already knows how to do:
+
+```python
+import bench_core
+
+measured = bench_core.run_measured(
+    [bench_core.PY, "-c", CHILD, site, path, ...],
+    env={"CANNS_RIPSER_STATS": "1"}, timeout=600, tag="my_experiment")
+
+stats = bench_core.parse_stats(measured.stderr)      # the build's own counters
+phases = bench_core.parse_phasestats(measured.stderr)  # the whole-run split
+row["wall_s"] = "%.3f" % measured.wall
+row["foreign_cpu"] = measured.foreign      # the quiet-window gate's number
+row["verdict"] = "OK" if measured.ok else "RC=%s" % measured.rc
+bench_core.write_table(out, FIELDS, rows)
+```
+
+`bench_core` gives you: the host's paths and interpreter, the
+foreign-load-measured child runner, the parsers for the build's own
+instrumentation, the CSV writer, the "the wrong library got imported" guard
+(the editable-install trap), and the build identity (commit, source
+fingerprint, extension md5). **Do not re-implement any of them.** They were
+re-implemented in every runner for a year and the copies drifted.
+
+**2. Write the checker**, in `checkers/`, named after the runner. It must
+derive its grid from the table, take `--max-foreign-cpu`, and carry negative
+self-tests. `check_cofacet_early_exit_ab.py` is the smallest complete example
+of the shape.
+
+**3. Add the runner and the checker to `drivers/sync_to_server.sh`.** The file
+list there is explicit on purpose: a glob would silently stop covering a file
+that was renamed, and a benchmark script that did not land fails loudly while
+an engine file that did not land compiles into a binary that runs and
+produces numbers, which fails silently.
+
+**4. Add the table to `RESULTS-20261020.md`**, which is the map from a table
+to the checker that guards it, and which is where a reader should start.
+
+**5. If the experiment changes the code**, the tables of *every* experiment
+are now stale: a table is only comparable with another table when the two
+came from the same build. `drivers/build_measure_sites.sh` rebuilds every
+build the tables come from, and `drivers/quiet_window_watch.sh` waits for a
+quiet window and then re-measures the chain.
+
 ## The harness (`harness/`)
 
 | runner | what it measures | checker |
 |---|---|---|
-| `clean_h2h.py` | the head-to-head against ripser++ on ONE filtration | `check_clean_h2h.py` |
-| `final_h2h.py` | the final head-to-head, our GPU build against ripser++ | `check_final_h2h.py` |
 | `standard_bench.py` | the standard suite on ripser++'s own datasets, four sides | `check_standard_bench.py` |
-| `characterize_gridcells.py` | the load the grid-cell corpus actually produces | `check_characterize_gridcells.py` |
 | `scale_scan.py` | the scale scan, five arms, the fair comparison | `check_scale_scan.py` |
 | `unified_ablation.py` | all switches on, against exactly one switch off | `check_unified_ablation.py` |
-| `t_arm_equivalence.py` | whether the two filtrations are the same one | `check_t_arm_equivalence.py` |
+| `characterize_gridcells.py` | the load the grid-cell corpus actually produces | `check_characterize_gridcells.py` |
 | `validate_gridcells.py` | cross-implementation validation on the corpus | `check_validate_gridcells.py` |
+| `o3_profile.py` | where the time goes on the instance we lose on | `check_o3_profile.py` |
+| `o3_cpu_scaling.py` | the same instance at 1, 2, 4 and 16 threads | `check_o3_cpu_scaling.py` |
+| `apparent_bench.py` | the apparent-pair equivalence | `check_apparent_bench.py` |
+| `gap_analysis.py` | same-batch gap accounting, stage by stage | `check_gap.py` |
+| `cofacet_early_exit_ab.py` | the cofacet early exit, two arms of one binary | `check_cofacet_early_exit_ab.py` |
+| `barcode_equivalence.py` | two builds, byte-identical barcodes required | -- |
+| `clean_h2h.py` | the head-to-head against ripser++ on ONE filtration | `check_clean_h2h.py` |
+| `final_h2h.py` | the final head-to-head, our GPU build against ripser++ | `check_final_h2h.py` |
+| `t_arm_equivalence.py` | whether the two filtrations are the same one | `check_t_arm_equivalence.py` |
 | `filtration_sweep.py` | both filtrations, both sides, one interleaved batch | `check_filtration_sweep.py` |
 | `nsfix_ab.py` | interleaved A/B over several builds, on several arms | `check_nsfix_ab.py` |
 | `bounds_gridcells_ab.py` | the column-store A/B on the corpus | `check_bounds_ab.py` |
-| `apparent_bench.py` | the apparent-pair equivalence | `check_apparent_bench.py` |
-| `gap_analysis.py` | same-batch gap accounting, stage by stage | `check_gap.py` |
 | `h2h_coeff_ab.py` | the coefficient field, settled by an interleaved A/B | `check_h2h_coeff_ab.py` |
-| `o3_profile.py` | where the time goes on the instance we lose on | `check_o3_profile.py` |
-| `o3_cpu_scaling.py` | the same instance at 1, 2, 4 and 16 threads | `check_o3_cpu_scaling.py` |
+| `comprehensive_benchmark.py` | the comparison against `ripser.py`, the Python reference | -- |
 | `determinism_check.py` | run-to-run reproducibility of both sides | -- |
 | `cpu_baseline_giotto.py` | the CPU baseline against giotto-ph's multi-process Ripser | -- |
 | `gca_bench.py` (in the corpus, not in this repository) | the grid-cells main benchmark | `check_gridcells_bench.py` |
@@ -85,14 +172,13 @@ guards the table that compares the two implementations' reduction, and it
 is the check that makes "both sides do the same work" a fact rather than a
 claim.
 
-Called by the runners: `h2h_child.py` (one measured run of our ripser, used
-by `final_h2h.py`, `gap_analysis.py` and the archived probes) and
-`apparent_fixtures.py` (the fixtures for `apparent_bench.py`).
+### The libraries the runners import
 
-Called by every runner that measures time: `foreign_cpu.py`. It reads every
-process's CPU time from `/proc`, sums the ones owned by another user, and
-hands the runner the number of cores that somebody else was using while
-the row was measured. It is what the quiet-window gate is applied to.
+| module | what it is for |
+|---|---|
+| `bench_core.py` | **the shared core.** The host's paths, the foreign-load-measured child runner, the parsers for the build's own instrumentation, the CSV writer, the wrong-library guard, the build identity. A new runner imports this and writes only what is new about its experiment. |
+| `foreign_cpu.py` | the number of cores another user was using while a row was measured. Read from `/proc`, so it excludes our own work by construction and needs no fudge factor for how busy we are. It is what the quiet-window gate is applied to. |
+| `apparent_fixtures.py` | the fixtures for `apparent_bench.py`. |
 
 `cpu_baseline_giotto.py` has no checker because it could not be run: giotto-ph
 does not install in the benchmark environment (its wheel unpacks to a
@@ -104,8 +190,10 @@ failure in the `giotto_error` column rather than an empty number.
 Run by hand: `make_ripserpp_input.py` (writes the input file for ripser++),
 `merge_scale_scan.py` (merges the passes of a scale scan into one table),
 `cross_batch.py` (compares two copies of the same table cell by cell -- the
-second, independent line of evidence that the host was quiet) and
-`reduce_split.py` (our reduction against ripser++'s, split by stage).
+second, independent line of evidence that the host was quiet),
+`reduce_split.py` (our reduction against ripser++'s, split by stage) and
+`analysis_results.py` (turns `comprehensive_benchmark.py`'s raw output into
+the plots and the summary).
 
 ## Rendering the paper's sections from the tables (`tools/`)
 
@@ -121,7 +209,9 @@ the provenance columns.
 
 | script | what it does |
 |---|---|
-| `sync_to_server.sh` | copies the source to the benchmark host, atomically, and refuses an empty file |
+| `sync_to_server.sh` | copies the benchmark scripts to the host, atomically, and refuses an empty file |
+| `sync_engine_to_server.sh` | the same for the RUST sources, which the other one does not cover |
+| `build_measure_sites.sh` | rebuilds every build the tables come from, and moves the old ones aside rather than deleting them |
 | `build_and_h2h.sh` | builds the two sides and runs the head-to-head |
 | `build_abl_variants.sh` | builds the ablation variants, each into its own directory |
 | `quiet_window_watch.sh` | waits for a quiet window, then measures, and discards a contaminated batch |
@@ -130,25 +220,20 @@ the provenance columns.
 
 ## The probes (`archive/`)
 
-These answered a question once. They are kept because the answer is in the
-papers and the report, and because a claim that cannot be re-run is a claim
-that cannot be checked. They are not tables, and most of them have no
-checker.
+Two of these still guard something, and they stay:
 
-| script | the question it answered |
+| script | the question it answers |
 |---|---|
-| `inf_form_probe.py` | what exactly differs between the `+inf`-preserved and the capped input |
-| `thresh_probe.py` | whether the 30% `+inf` in the ASA matrix is actually costing us |
-| `loop_probe.py` | how the reducing columns are actually reduced, from the counters |
-| `sparse_paths.py` | three ways to read the same 30%-`+inf` matrix |
-| `sort_gate.py`, `sort_neg_test.py` | the gate for the GPU radix sort, and its negative self-test |
-| `two_site_ab.py`, `onepass_ab.py`, `pinned_cache_ab.py` | A/Bs between two builds, in one interleaved batch |
-| `h2h_child.py` | one measured run of our ripser, used by the probes |
-| `p21_gate.sh` | the gate for the auto-sparse switch. **Archived because it is broken**: it calls `compare_p4.py`, which does not exist in this repository, so it cannot run |
+| `sort_gate.py` | the gate for the GPU radix sort -- the two arms have to agree, and the sorted and unsorted bar hashes have to be equal |
+| `sort_neg_test.py` | its negative self-test: deliberately broken variants of the library, which the gate has to REJECT |
+
+The probes that answered a question once and guard nothing now are in the
+paper project's process record, not here. See "What may live in this
+repository" above for the rule that decided it.
 
 The three `patch_*.py` scripts are in `patches/`, not here: they are applied
-to a COPY of ripser++ to instrument it, and they are used by the probes and
-by the reduction comparison, so they are kept where they can be run.
+to a COPY of ripser++ to instrument it, and the original binary is never
+touched, because the paper quotes its time.
 
 ## The paper's drafts
 
@@ -168,5 +253,9 @@ themselves.
 
 ## What came with the repository
 
-`ASA_SHUFFLE.md`, `analysis/`, `analysis_results.py`, `comprehensive_benchmark.py`,
-`phase_baseline.py` and `progress_bar_impact.py` predate this work.
+`ASA_SHUFFLE.md`, `comprehensive_benchmark.py` (now in `harness/`) and
+`analysis_results.py` (now in `tools/`) predate this work. The first two
+measure against `ripser.py`, the Python reference, and the repository's own
+README attributes its headline performance numbers to them -- so they are
+part of the method, and they are kept. The one PNG in `analysis/` was a
+sample output of `analysis_results.py` and was removed.

@@ -34,7 +34,7 @@ dimension birth/death values on dense and sparse inputs).
 
 #### Performance vs `ripser.py` (v0.9.0)
 
-Measured by `benchmarks/ripser/comprehensive_benchmark.py --fast` (24
+Measured by `benchmarks/ripser/harness/comprehensive_benchmark.py --fast` (24
 dense point-cloud tests, n ∈ {50, 100, 150, 300}, maxdim ∈ {1, 2},
 categories: circle, sphere, torus, random, clusters, grid, swiss_roll,
 moons, circles). Cross-validated on **macOS arm64** and **Linux x86_64

@@ -30,7 +30,10 @@ FILES="harness/scale_scan.py harness/standard_bench.py harness/unified_ablation.
 harness/t_arm_equivalence.py harness/foreign_cpu.py harness/o3_profile.py \
 harness/o3_cpu_scaling.py harness/clean_h2h.py harness/h2h_coeff_ab.py \
 harness/cofacet_early_exit_ab.py harness/barcode_equivalence.py \
+harness/bench_core.py \
 drivers/quiet_window_watch.sh drivers/corpus_quiet_run.sh \
+drivers/build_abl_variants.sh drivers/build_measure_sites.sh \
+drivers/fetch_clean_tables.sh drivers/sync_engine_to_server.sh \
 tools/cross_batch.py \
 checkers/check_scale_scan.py checkers/check_standard_bench.py \
 checkers/check_unified_ablation.py checkers/check_gridcells_bench.py \

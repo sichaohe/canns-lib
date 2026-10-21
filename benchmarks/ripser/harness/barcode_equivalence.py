@@ -22,18 +22,18 @@ USAGE
 from __future__ import annotations
 
 import argparse
-import csv
 import glob
 import hashlib
 import os
-import subprocess
 import sys
-import time
 
-PY = "/home/sichaohe/miniconda3/envs/rl/bin/python"
-CORPUS = "/home/sichaohe/gridcells/matrices"
-ASA = "/home/sichaohe/ph_work/ph_dm_1200.npy"
-O3 = "/home/sichaohe/ph_work/ripserpp/ripserplusplus/examples/o3_4096.point_cloud"
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import bench_core
+
+PY = bench_core.PY
+CORPUS = bench_core.CORPUS
+ASA = bench_core.ASA_MATRIX
+O3 = os.path.join(bench_core.EXAMPLES, "o3_4096.point_cloud")
 
 CHILD = r'''
 import hashlib, os, sys, time
@@ -77,22 +77,20 @@ FIELDS = ("input", "kind", "maxdim", "coeff", "thresh", "old_counts", "new_count
 
 
 def run(site, path, kind, maxdim, coeff, thresh, timeout):
-    t0 = time.perf_counter()
-    proc = subprocess.run(
+    measured = bench_core.run_measured(
         [PY, "-c", CHILD, site, path, kind, str(maxdim), str(coeff), thresh],
-        capture_output=True, text=True, timeout=timeout)
-    wall = time.perf_counter() - t0
-    if proc.returncode != 0:
-        return "", "", wall, "RC=%s" % proc.returncode
+        timeout=timeout, tag="beq_%s" % os.path.basename(path)[:40], keep=True)
+    if measured.rc != 0:
+        return "", "", measured.wall, "RC=%s" % measured.rc
     counts, hsh = "", ""
-    for line in proc.stdout.splitlines():
+    for line in measured.stdout.splitlines():
         if line.startswith("COUNTS "):
             counts = line[7:].strip()
         elif line.startswith("HASH "):
             hsh = line[5:].strip()
     if not hsh:
-        return counts, hsh, wall, "NOHASH"
-    return counts, hsh, wall, "OK"
+        return counts, hsh, measured.wall, "NOHASH"
+    return counts, hsh, measured.wall, "OK"
 
 
 def main() -> int:
@@ -146,11 +144,7 @@ def main() -> int:
               % (name, "SAME" if equal else "*** DIFFERENT ***", os_, ns,
                  "" if equal else (oh + " vs " + nh)), flush=True)
 
-    with open(args.out, "w", newline="") as fh:
-        w = csv.DictWriter(fh, fieldnames=FIELDS)
-        w.writeheader()
-        for r in rows:
-            w.writerow(r)
+    bench_core.write_table(args.out, FIELDS, rows)
 
     print("\n%d inputs compared, %d differ -- wrote %s" % (len(rows), bad, args.out))
     if bad:

@@ -34,19 +34,14 @@ USAGE
 from __future__ import annotations
 
 import argparse
-import csv
 import json
 import os
-import re
-import subprocess
 import sys
-import time
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-import foreign_cpu
+import bench_core
 
-PY = "/home/sichaohe/miniconda3/envs/rl/bin/python"
-PH = "/home/sichaohe/ph_work"
+PY = bench_core.PY
 
 # The datasets. `o3` is the point cloud where we are slowest relative to the
 # references; `asa` is the distance matrix the paper's headline corpus number
@@ -58,14 +53,14 @@ PH = "/home/sichaohe/ph_work"
 DATASETS = {
     "o3": {
         "kind": "point_cloud",
-        "path": "/home/sichaohe/ph_work/ripserpp/ripserplusplus/examples/o3_4096.point_cloud",
+        "path": os.path.join(bench_core.EXAMPLES, "o3_4096.point_cloud"),
         "maxdim": 3,
         "thresh": "1.4",
         "coeff": 2,
     },
     "asa": {
         "kind": "distance_matrix",
-        "path": "/home/sichaohe/ph_work/ph_dm_1200.npy",
+        "path": bench_core.ASA_MATRIX,
         "maxdim": 2,
         "thresh": "inf",
         "coeff": 47,
@@ -128,57 +123,22 @@ for dim, bars in enumerate(r):
 print("BARHASH " + h.hexdigest())
 '''
 
-STATS_RE = re.compile(r"^STATS dim=(\d+) ")
-
-
-def parse_stats(stderr_text):
-    """The per-dimension STATS lines, as a dict of dicts."""
-    out = {}
-    for line in stderr_text.splitlines():
-        if not STATS_RE.match(line):
-            continue
-        fields = {}
-        for tok in line.split():
-            if "=" in tok:
-                k, _, v = tok.partition("=")
-                fields[k] = v
-        try:
-            dim = int(fields.get("dim", ""))
-        except ValueError:
-            continue
-        out[dim] = fields
-    return out
-
-
 def run_arm(dataset, arm, rep, site, timeout):
     """One run of one arm. Returns the row dict and the parsed barcode."""
     spec = DATASETS[dataset]
-    env = dict(os.environ)
-    env["CANNS_RIPSER_STATS"] = "1"
-    env["CANNS_RIPSER_COFACET_EARLY_EXIT"] = ARM_ENV[arm]
-    out_path = "/tmp/_eearly_%s_%s.out" % (dataset, arm)
-    err_path = "/tmp/_eearly_%s_%s.err" % (dataset, arm)
-    with open(out_path, "w") as fo, open(err_path, "w") as fe:
-        with foreign_cpu.Probe() as probe:
-            t0 = time.perf_counter()
-            proc = subprocess.Popen(
-                [PY, "-c", CHILD, site, spec["path"], spec["kind"],
-                 str(spec["maxdim"]), spec["thresh"], str(spec["coeff"])],
-                stdout=fo, stderr=fe, env=env)
-            try:
-                proc.wait(timeout=timeout)
-            except subprocess.TimeoutExpired:
-                proc.kill()
-                proc.wait()
-            wall = time.perf_counter() - t0
-    rc = proc.returncode
-    out = open(out_path).read()
-    err = open(err_path).read()
+    env = {
+        "CANNS_RIPSER_STATS": "1",
+        "CANNS_RIPSER_COFACET_EARLY_EXIT": ARM_ENV[arm],
+    }
+    measured = bench_core.run_measured(
+        [PY, "-c", CHILD, site, spec["path"], spec["kind"],
+         str(spec["maxdim"]), spec["thresh"], str(spec["coeff"])],
+        env=env, timeout=timeout, tag="eearly_%s_%s" % (dataset, arm), keep=True)
 
     bars = ""
     barhash = ""
     lib = ""
-    for line in out.splitlines():
+    for line in measured.stdout.splitlines():
         if line.startswith("BARS "):
             bars = line[5:]
         elif line.startswith("BARHASH "):
@@ -194,15 +154,15 @@ def run_arm(dataset, arm, rep, site, timeout):
     row["maxdim"] = spec["maxdim"]
     row["coeff"] = spec["coeff"]
     row["thresh"] = spec["thresh"]
-    row["wall_s"] = "%.3f" % wall
+    row["wall_s"] = "%.3f" % measured.wall
     row["bars"] = bars
     row["barhash"] = barhash
     row["lib"] = lib
-    row["foreign_cpu"] = probe.record()
-    row["foreign_max"] = probe.record_max()
-    row["verdict"] = "OK" if rc == 0 and bars else "RC=%s" % rc
+    row["foreign_cpu"] = measured.foreign
+    row["foreign_max"] = measured.foreign_max
+    row["verdict"] = "OK" if measured.ok and bars else "RC=%s" % measured.rc
 
-    for dim, fields in parse_stats(err).items():
+    for dim, fields in bench_core.parse_stats(measured.stderr).items():
         for key in ("scan_s", "push_s", "total_s", "rounds"):
             row["dim%d_%s" % (dim, key)] = fields.get(key, "")
     return row
@@ -247,11 +207,7 @@ def main() -> int:
                       % (row["wall_s"], row["verdict"], row["foreign_cpu"]),
                       flush=True)
 
-    with open(args.out, "w", newline="") as fh:
-        w = csv.DictWriter(fh, fieldnames=FIELDS)
-        w.writeheader()
-        for r in rows:
-            w.writerow({k: r.get(k, "") for k in FIELDS})
+    bench_core.write_table(args.out, FIELDS, rows)
     print("\nwrote %s (%d rows)" % (args.out, len(rows)))
 
     # THE GUARD. The two arms must produce the same barcode, on every
