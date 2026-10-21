@@ -38,10 +38,14 @@ import tempfile
 SIDES = {
     "ours_gpu": (1, 2, 3),
     "ours_cpu": (1, 2, 3),
+    "pp_profiled": (1, 2, 3),
     "pp": (1, 2, 3),
 }
-# The side whose column counts the other side's must agree with.
-REFERENCE = "pp"
+# The side whose column counts the other side's must agree with. It is the
+# PATCHED copy of ripser++, because the pristine one does not print the
+# dimension-1 column count; the pristine one is still measured, as the
+# wall-clock reference whose number the paper quotes.
+REFERENCE = "pp_profiled"
 OURS = "ours_gpu"
 
 REQUIRED = ("side", "dim", "columns", "wall_s", "foreign_cpu", "verdict")
