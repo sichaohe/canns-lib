@@ -29,6 +29,7 @@ DST=${CANNS_BENCH_DIR:-/home/sichaohe/canns-lib-dev/benchmarks/ripser}
 FILES="harness/scale_scan.py harness/standard_bench.py harness/unified_ablation.py \
 harness/t_arm_equivalence.py harness/foreign_cpu.py harness/o3_profile.py \
 harness/o3_cpu_scaling.py harness/clean_h2h.py harness/h2h_coeff_ab.py \
+harness/cofacet_early_exit_ab.py harness/barcode_equivalence.py \
 drivers/quiet_window_watch.sh drivers/corpus_quiet_run.sh \
 tools/cross_batch.py \
 checkers/check_scale_scan.py checkers/check_standard_bench.py \
@@ -37,7 +38,7 @@ checkers/check_clean_h2h.py checkers/check_nsfix_ab.py \
 checkers/check_bounds_ab.py checkers/check_validate_gridcells.py \
 checkers/check_characterize_gridcells.py checkers/check_o3_profile.py \
 checkers/check_o3_cpu_scaling.py checkers/check_h2h_coeff_ab.py \
-checkers/check_reduce_split.py"
+checkers/check_reduce_split.py checkers/check_cofacet_early_exit_ab.py"
 
 SSH="ssh -i $KEY -p $PORT -o ConnectTimeout=15 sichaohe@$HOST"
 
