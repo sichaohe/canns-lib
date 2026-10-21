@@ -133,6 +133,38 @@ def check(path, expect_ratio_max=None, verbose=True):
                         "is not comparable with a GPU build"
                         % (i + 2, r.get("rep"), r.get("who"), r.get("gpu_err")))
 
+    # -- rule 2b: a baseline that failed looks like a baseline that won ---
+    # The reference run (ripser++) that read no input, or that died, comes
+    # back in a fraction of the time the real run takes, and a table that
+    # reports it reports a crash as a result.
+    ours_walls = []
+    for r in rows:
+        try:
+            w = float((r.get("wall_s") or "").strip() or 0)
+        except ValueError:
+            w = 0.0
+        if w <= 0:
+            errs.append("rep=%s who=%s: the wall clock is %r -- the run did "
+                        "not do any work" % (r.get("rep"), r.get("who"),
+                                             r.get("wall_s")))
+        if r.get("who") == "ours":
+            ours_walls.append(w)
+    if ours_walls and min(ours_walls) > 0:
+        shortest = min(ours_walls)
+        for r in rows:
+            if r.get("who") == "ours":
+                continue
+            try:
+                w = float((r.get("wall_s") or "").strip() or 0)
+            except ValueError:
+                w = 0.0
+            if 0 < w < shortest * 0.05:
+                errs.append("rep=%s who=%s: the reference finished in %.3f s, "
+                            "under 5%% of the shortest of our own runs "
+                            "(%.3f s) on the same input: that is a failed "
+                            "run, not a fast one"
+                            % (r.get("rep"), r.get("who"), w, shortest))
+
     # -- rule 3: barcode ---------------------------------------------------
     for r in rows:
         if r.get("who") == "ours":

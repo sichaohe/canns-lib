@@ -24,7 +24,7 @@ SRC=$(cd "$(dirname "$0")" && pwd)
 DST=${CANNS_BENCH_DIR:-/home/sichaohe/canns-lib-dev/benchmarks/ripser}
 
 FILES="scale_scan.py standard_bench.py unified_ablation.py t_arm_equivalence.py \
-foreign_cpu.py quiet_window_watch.sh cross_batch.py o3_profile.py o3_cpu_scaling.py \
+foreign_cpu.py quiet_window_watch.sh cross_batch.py o3_profile.py o3_cpu_scaling.py clean_h2h.py h2h_coeff_ab.py check_h2h_coeff_ab.py \
 corpus_quiet_run.sh \
 check_scale_scan.py check_standard_bench.py check_unified_ablation.py \
 check_gridcells_bench.py check_clean_h2h.py check_nsfix_ab.py \

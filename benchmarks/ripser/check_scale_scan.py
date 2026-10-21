@@ -41,6 +41,14 @@ import tempfile
 # record, not for the claim.
 SIDES = ("ours_inf", "ours_T", "ours_all", "ripserpp_T", "ripserpp_all")
 OURS = ("ours_inf", "ours_T", "ours_all")
+
+
+def is_ours(r):
+    return r.get("side") in OURS
+
+
+def row_label(r):
+    return "n=%s %s:" % (r.get("n"), r.get("side"))
 REFERENCE = ("ripserpp_T", "ripserpp_all")
 # The arms that compute the SAME filtration, so their bar counts must be
 # equal: the two threshold settings of each implementation, and our `+inf`
@@ -167,6 +175,37 @@ def check(path, sizes=None, max_loadavg=0.0, max_foreign_cpu=0.25):
                                  "number" % (n, side))
             elif side in OURS:
                 fails.append("n=%d %s: no library wall clock" % (n, side))
+
+    # A BASELINE THAT FAILED LOOKS LIKE A BASELINE THAT WON. A reference
+    # run that read no input, or that died, comes back in a fraction of
+    # the time the real run takes, and a table that reports it reports a
+    # crash as a result. Every row must have a positive wall clock, and
+    # the reference must not be faster than a small fraction of ours.
+    ours_walls = []
+    for r in rows:
+        try:
+            w = float((r.get("wall_s") or "").strip() or 0)
+        except ValueError:
+            w = 0.0
+        if w <= 0:
+            fails.append("%s the wall clock is %r -- the run did not do any "
+                         "work" % (row_label(r), r.get("wall_s")))
+        if is_ours(r):
+            ours_walls.append(w)
+    if ours_walls and min(ours_walls) > 0:
+        shortest = min(ours_walls)
+        for r in rows:
+            if is_ours(r):
+                continue
+            try:
+                w = float((r.get("wall_s") or "").strip() or 0)
+            except ValueError:
+                w = 0.0
+            if 0 < w < shortest * 0.05:
+                fails.append("%s finished in %.3f s, under 5%% of the "
+                             "shortest of our own runs (%.3f s) on the same "
+                             "input: that is a failed run, not a fast one"
+                             % (row_label(r), w, shortest))
 
     # A table measured while the host was busy is not a measurement of the
     # code: on this shared machine a neighbour's job changes the numbers by

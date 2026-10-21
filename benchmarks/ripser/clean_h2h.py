@@ -65,6 +65,7 @@ CHILD = r'''
 import hashlib, sys, time
 import numpy as np
 site, thresh = sys.argv[1], float(sys.argv[2])
+coeff = int(sys.argv[3])
 sys.path.insert(0, site)
 from canns_lib.ripser import ripser
 d = np.load("/home/sichaohe/ph_work/ph_dm_1200.npy")
@@ -77,10 +78,10 @@ np.fill_diagonal(d, 0.0)
 # the comparison excluded on the other side. The measured call is
 # therefore the SECOND one, and both numbers are reported.
 t0 = time.perf_counter()
-ripser(d, maxdim=2, thresh=thresh, coeff=47, distance_matrix=True, progress_bar=False)["dgms"]
+ripser(d, maxdim=2, thresh=thresh, coeff=coeff, distance_matrix=True, progress_bar=False)["dgms"]
 cold = time.perf_counter() - t0
 t0 = time.perf_counter()
-r = ripser(d, maxdim=2, thresh=thresh, coeff=47, distance_matrix=True, progress_bar=False)["dgms"]
+r = ripser(d, maxdim=2, thresh=thresh, coeff=coeff, distance_matrix=True, progress_bar=False)["dgms"]
 wall = time.perf_counter() - t0
 md5 = ":".join(hashlib.md5(np.asarray(sorted(map(tuple, x)), dtype="float64").tobytes()).hexdigest() for x in r)
 h1 = np.asarray(r[1], dtype="float64")
@@ -158,7 +159,7 @@ def provenance(site):
     return out
 
 
-def run_ours(timeout: int):
+def run_ours(timeout: int, coeff: int):
     env = dict(os.environ)
     env["CANNS_RIPSER_STATS"] = "1"
     # `/usr/bin/time` so the table carries the PROCESS wall and the peak RSS
@@ -167,7 +168,8 @@ def run_ours(timeout: int):
     # import, numpy load on ours; CUDA init and the text load on ripser++'s)
     # were invisible -- which is exactly how two tables of the same
     # comparison ended up quoting different ratios.
-    p = subprocess.run(["/usr/bin/time", "-f", "__T__%e %M", PY, "-c", CHILD, SITE, repr(T)],
+    p = subprocess.run(["/usr/bin/time", "-f", "__T__%e %M", PY, "-c", CHILD,
+                        SITE, repr(T), str(coeff)],
                        capture_output=True, text=True, env=env, timeout=timeout)
     rec = {"rc": p.returncode}
     for line in p.stdout.splitlines():
@@ -238,6 +240,12 @@ def main() -> int:
     ap.add_argument("--out", default="clean_h2h.csv")
     ap.add_argument("--reps", type=int, default=3)
     ap.add_argument("--timeout", type=int, default=900)
+    ap.add_argument("--coeff", type=int, default=47,
+                    help="the coefficient field. 47 is what this dataset "
+                         "needs (it has torsion that Z/2 misses); 2 puts us "
+                         "on the SAME footing as ripser++, which only does "
+                         "Z/2 -- the comparison then measures the same "
+                         "computation on both sides")
     args = ap.parse_args()
 
     global PROVENANCE, THREADS
@@ -252,7 +260,8 @@ def main() -> int:
     rows = []
     for rep in range(1, args.reps + 1):
         for who in ("ours", "ripserpp"):
-            r = run_ours(args.timeout) if who == "ours" else run_ripserpp(args.timeout)
+            r = (run_ours(args.timeout, args.coeff) if who == "ours"
+                 else run_ripserpp(args.timeout))
             # The table has to say WHICH build it measured: a head-to-head
             # without the build identity is not reproducible.
             rec = {"rep": rep, "who": who,
