@@ -42,6 +42,10 @@ pub trait HasCofacets: DistanceMatrix {
     where
         Self: 'a;
 
+    /// The threshold is the diameter above which EVERY caller of this
+    /// enumerator rejects a cofacet. It is passed in so the enumerator can
+    /// stop reading distances once the cofacet is already known to be
+    /// rejected -- see `SimplexCoboundaryEnumerator::next`.
     fn cofacet_enumerator<'a>(
         &'a self,
         simplex: DiameterEntryT,
@@ -49,6 +53,7 @@ pub trait HasCofacets: DistanceMatrix {
         n: IndexT,
         binomial_coeff: &'a BinomialCoeffTable,
         modulus: crate::ripser::types::CoefficientT,
+        threshold: crate::ripser::types::ValueT,
     ) -> Self::Enumerator<'a>;
 
     // Boxed variant for dynamic callers (parallel assembly). Defaults to boxing
@@ -60,11 +65,19 @@ pub trait HasCofacets: DistanceMatrix {
         n: IndexT,
         binomial_coeff: &'a BinomialCoeffTable,
         modulus: crate::ripser::types::CoefficientT,
+        threshold: crate::ripser::types::ValueT,
     ) -> Box<dyn CofacetEnumerator + 'a>
     where
         Self: Sized,
     {
-        Box::new(self.cofacet_enumerator(simplex, dim, n, binomial_coeff, modulus))
+        Box::new(self.cofacet_enumerator(
+            simplex,
+            dim,
+            n,
+            binomial_coeff,
+            modulus,
+            threshold,
+        ))
     }
 }
 
@@ -109,7 +122,8 @@ impl<T: HasCofacets> HasCofacets for &T {
         n: IndexT,
         binomial_coeff: &'a BinomialCoeffTable,
         modulus: crate::ripser::types::CoefficientT,
+        threshold: crate::ripser::types::ValueT,
     ) -> T::Enumerator<'a> {
-        (**self).cofacet_enumerator(simplex, dim, n, binomial_coeff, modulus)
+        (**self).cofacet_enumerator(simplex, dim, n, binomial_coeff, modulus, threshold)
     }
 }

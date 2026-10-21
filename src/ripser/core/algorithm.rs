@@ -936,6 +936,7 @@ where
                 self.n,
                 &self.binomial_coeff,
                 self.modulus,
+                self.threshold,
             );
 
             let mut coeff_map: FxHashMap<IndexT, CoefficientT> = FxHashMap::default();

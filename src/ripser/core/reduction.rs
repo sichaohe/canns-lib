@@ -725,7 +725,14 @@ where
         let target = simplex.get_diameter();
         let mut cofacets =
             self.dist
-                .cofacet_enumerator(simplex, dim, self.n, &self.binomial_coeff, self.modulus);
+                .cofacet_enumerator(
+                    simplex,
+                    dim,
+                    self.n,
+                    &self.binomial_coeff,
+                    self.modulus,
+                    self.threshold,
+                );
         while cofacets.has_next(true) {
             let cofacet = cofacets.next();
             apparent_stats::count_cofacet();
@@ -944,7 +951,14 @@ where
 
         let mut cofacets =
             self.dist
-                .cofacet_enumerator(simplex, dim, self.n, &self.binomial_coeff, self.modulus);
+                .cofacet_enumerator(
+                    simplex,
+                    dim,
+                    self.n,
+                    &self.binomial_coeff,
+                    self.modulus,
+                    self.threshold,
+                );
 
         while cofacets.has_next(true) {
             let cofacet = cofacets.next();
@@ -995,7 +1009,14 @@ where
 
         let mut cofacets =
             self.dist
-                .cofacet_enumerator(simplex, dim, self.n, &self.binomial_coeff, self.modulus);
+                .cofacet_enumerator(
+                    simplex,
+                    dim,
+                    self.n,
+                    &self.binomial_coeff,
+                    self.modulus,
+                    self.threshold,
+                );
 
         while cofacets.has_next(true) {
             let cofacet = cofacets.next();
@@ -1034,7 +1055,14 @@ where
         let mut visited = 0u64;
         let mut cofacets =
             self.dist
-                .cofacet_enumerator(simplex, dim, self.n, &self.binomial_coeff, self.modulus);
+                .cofacet_enumerator(
+                    simplex,
+                    dim,
+                    self.n,
+                    &self.binomial_coeff,
+                    self.modulus,
+                    self.threshold,
+                );
 
         while cofacets.has_next(true) {
             let cofacet = cofacets.next();
@@ -1057,7 +1085,14 @@ where
         let mut visited = 0u64;
         let mut cofacets =
             self.dist
-                .cofacet_enumerator(simplex, dim, self.n, &self.binomial_coeff, self.modulus);
+                .cofacet_enumerator(
+                    simplex,
+                    dim,
+                    self.n,
+                    &self.binomial_coeff,
+                    self.modulus,
+                    self.threshold,
+                );
 
         while cofacets.has_next(true) {
             let cofacet = cofacets.next();
