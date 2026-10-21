@@ -29,7 +29,14 @@ LOG=/tmp/corpus_watch.log
 REPO=${CANNS_BENCH_REPO:-/home/sichaohe/canns-lib-dev}
 DRIVER=${GCA_DRIVER:-/home/sichaohe/ph_work/gcbench/gca_bench.py}
 OUT=/tmp/gca_results_clean.csv
-MODULE=$REPO/benchmarks/ripser
+# The probe lives in `harness/`, NEXT TO the runners that import it. This
+# path was the tree root, which was correct until the harness became a
+# tree; after the move it was wrong, and the probe failed with an import
+# error that `2>/dev/null` swallowed -- so the watcher read an EMPTY
+# foreign load every minute and, because an empty reading is not a
+# quiet one, it never started. The symptom was a watcher that logged
+# `foreign_cores=` forever.
+MODULE=$REPO/benchmarks/ripser/harness
 
 MAX_FOREIGN=0.25
 QUIET_FOREIGN=0.25
