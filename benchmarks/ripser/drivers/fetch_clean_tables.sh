@@ -61,9 +61,10 @@ import sys
 path, module = sys.argv[1], sys.argv[2]
 sys.path.insert(0, module)
 import bench_core
-worst, missing, broken, rows = bench_core.foreign_summary(path)
+worst, missing, broken, timed_out, rows = bench_core.foreign_summary(path)
 print("      worst foreign load: mean %.3f cores, %d row(s) without a reading, "
-      "%d broken row(s)" % (worst, missing, broken))
+      "%d broken, %d timed out, %d rows"
+      % (worst, missing, broken, timed_out, rows))
 if missing or broken or worst > bench_core.FOREIGN_GATE:
     print("      NOT A MEASUREMENT ON A QUIET HOST -- do not quote this table")
 else:

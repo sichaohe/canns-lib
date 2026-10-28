@@ -8,6 +8,75 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Performance
+- **The cofacet enumerator stops reading distances for a cofacet the threshold
+  already rejects -- and only does so when that pays.** The enumerator used to
+  read all `dim + 1` distances of a candidate cofacet before the caller could
+  reject it on the threshold. On `o3_4096` (4,096 points, threshold 1.4) only
+  1.3% of the candidates are under the threshold, so 98.7% of the distance reads
+  were spent on cofacets that were thrown away -- and each of those reads is a
+  scattered miss into a 33.5 MB matrix. The threshold is now passed into the
+  enumerator and the read loop stops as soon as the running maximum is above
+  it; the true diameter is at least the running maximum, so such a cofacet is
+  rejected either way, and all seven call sites filter on the threshold before
+  they use the diameter.
+
+  **The switch is gated on the rejection rate, because the sign of its effect
+  is a property of the data.** Measured on the same binary, the same host and
+  the same 5.76 MB matrix, with the arm order reversed:
+
+  | threshold | early exit off | early exit on | |
+  |---|---|---|---|
+  | T (the maximum finite distance) | 12.63 s | 14.67 s | 1.16x, a loss |
+  | T/2 | 7.92 s | 10.48 s | 1.32x, a loss |
+  | T/4 | 1.15 s | 1.04 s | 0.90x, a win |
+  | T/10 | 0.65 s | 0.27 s | 0.41x, a win |
+
+  and 1.9x faster on `o3_4096`, where 98.7% of the candidates are rejected and
+  every read it skips is a DRAM miss. The early exit saves the distance reads
+  of the candidates the threshold rejects and costs one comparison per read, so
+  it pays when most candidates are rejected and it LOSES when they are not: on
+  the scale scan and on the ASA matrix, where the threshold is the matrix's
+  maximum distance and only the missing pairs are rejected, it was a 16-21% loss.
+  The gate is the rejection rate, and the algorithm layer knows it exactly --
+  the filtration holds the edges the threshold KEEPS, and every other pair is
+  one it rejects. The fraction is computed once per call, before the
+  reduction, and the enumerator asks for it once per walk rather than per read.
+
+  `CANNS_RIPSER_COFACET_EARLY_EXIT=0` restores the old behaviour exactly and
+  `=1` forces the early exit on whatever the data says, so the switch itself
+  can still be measured in isolation.
+
+  The barcode is unchanged: the two arms of the switch produce the same bars,
+  and the old and the new build produce byte-identical barcodes on all 99
+  inputs of the cross-build check (`o3_4096`, `asa_1200` and all 97 corpus
+  matrices). The reduction rounds per dimension are identical between the arms
+  as well -- the arms do the same work, and the change is in the cost of doing
+  it.
+
+  **Where this applies, stated exactly.** The early exit is in the HOST-side
+  cofacet enumerator, which is the reduction's path in every build, GPU
+  included: the reduction runs on the host whatever the build. It is **not**
+  in the GPU's column-assembly kernels, which compute the cofacet diameter
+  themselves (`kernel/ripser_kernels.cu` reads the `dim + 1` distances and
+  then tests `cd <= threshold`), so the assembly phase keeps the old
+  behaviour. The change makes the reduction cheaper; it does not make the
+  assembly cheaper.
+- **One comparison per distance read, not two, and the loop's state is hoisted
+  out of it.** The rejection test used to be two comparisons: `d > threshold`
+  and then the infinite case. With an infinite threshold the first could never
+  fire, so it was pure overhead on every read -- and the reads it was paying
+  for were the cheapest kind there are. The enumerator now computes, once per
+  matrix, the value a distance has to reach for the cofacet to be rejected --
+  the next float above a finite threshold, or infinity for an infinite one --
+  and one comparison covers both rejections, and the `-inf` case with them.
+  The test is on the distance just read rather than on the running maximum,
+  which is the same test (the running maximum can only reach `reject_at`
+  through a READ, because the simplex's own diameter is <= the threshold) and
+  one link shorter on the critical path. The loop's fields are copied into
+  locals first, because the compiler cannot prove that a call through the
+  matrix does not write through `self` and so reloads them on every iteration.
+  Measured on the 1,200-vertex scale-scan instance: 15.16 s against 15.41 s
+  before the change, and 12.61 s with the early exit off.
 - **A GPU build no longer creates a CUDA context to answer a question about
   the GPU.** `gpu::last_error()` called `device()`, and `device()` creates the
   context -- and the reduction called `last_error()` on every call, to fill in
@@ -29,157 +98,118 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   that makes a single call on a small instance does not pay for it. The corpus
   cells now measure the same on both builds (1.025 s against 1.019 s on the
   first matrix), with identical barcodes.
-- **The cofacet enumerator's state is hoisted out of its loop, and the early
-  exit tests the distance just read rather than the running maximum.** The two
-  tests are the same one: the running maximum can only reach `reject_at`
-  through a READ, because the simplex's own diameter is <= the threshold and
-  `reject_at` is the next float above it -- so `d >= reject_at` fires exactly
-  when the running maximum would have, and it is one link shorter on the
-  critical path. Measured on the 1,200-vertex scale-scan instance: 15.16 s
-  against 15.41 s before the change, and 12.61 s with the early exit off. The
-  early exit's cost on that instance is 16-21% and its saving on `o3_4096` is
-  1.9x; what decides the sign is the REJECTION RATE, measured by lowering the
-  threshold on the same matrix: at the threshold the early exit loses 16%, at
-  a quarter of it it wins 10%, and at a tenth it wins 2.4x. The switch is
-  therefore not a general speed-up of the reduction and the table that
-  measures it has to say so.
-- **The cofacet enumerator stops reading distances for a cofacet the threshold
-  already rejects.** The enumerator used to read all `dim + 1` distances of a
-  candidate cofacet before the caller could reject it on the threshold. On
-  `o3_4096` (4,096 points, threshold 1.4) only 1.3% of the candidates are under
-  the threshold, so 98.7% of the distance reads were spent on cofacets that
-  were thrown away -- and each of those reads is a scattered miss into a
-  33.5 MB matrix. The threshold is now passed into the enumerator and the read
-  loop stops as soon as the running maximum is above it; the true diameter is
-  at least the running maximum, so such a cofacet is rejected either way, and
-  all seven call sites filter on the threshold before they use the diameter.
-
-  The barcode is unchanged: the two arms of the switch produce the same bars,
-  and the old and the new build produce byte-identical barcodes on all eight
-  inputs of the cross-build check (`o3_4096`, `asa_1200` and six corpus
-  matrices). The reduction rounds per dimension are identical between the
-  arms as well -- the arms do the same work, and the change is in the cost of
-  doing it.
-
-  The timing is not quoted here. The first A/B was run on a host where
-  another user was using eleven cores, and a number measured on a busy host
-  is a number about the host; the table is re-measured in a quiet window
-  before any of it is published. The win is in the large-matrix,
-  finite-threshold regime -- on a small, cache-resident matrix at threshold =
-  infinity there is no miss to save.
-
-  **Where this applies, stated exactly.** The early exit is in the HOST-side
-  cofacet enumerator, which is the reduction's path in every build, GPU
-  included: the reduction runs on the host whatever the build. It is **not**
-  in the GPU's column-assembly kernels, which compute the cofacet diameter
-  themselves (`kernel/ripser_kernels.cu` reads the `dim + 1` distances and
-  then tests `cd <= threshold`), so the assembly phase keeps the old
-  behaviour. The change makes the reduction cheaper; it does not make the
-  assembly cheaper.
-
-  `CANNS_RIPSER_COFACET_EARLY_EXIT=0` restores the old behaviour exactly --
-  both early exits are under the same switch, because a partly-on early exit
-  is not an ablation but a third thing that no table describes.
-
-  **One comparison per distance read, not two.** The first clean measurement
-  of the switch found it made the 1,200-vertex ASA matrix 7% SLOWER, in
-  every repetition. The matrix is 2.9 MB and cache-resident, and it runs at
-  threshold = infinity, so the rejection test `d > threshold` could never
-  fire there and every one of those comparisons was pure overhead. The
-  enumerator now computes, once per matrix, the value a distance has to
-  reach for the cofacet to be rejected -- the next float above a finite
-  threshold, or infinity for an infinite one -- and one comparison then
-  covers both rejections, and the `-inf` case with them.
-
-  **And the switch is gated on the rejection rate**, because the
-  measurements say the sign of its effect is a property of the data: it is
-  1.9x faster where 98.7% of the candidates are rejected (`o3_4096`) and
-  16-32% slower where 30% are (the scale scan, the ASA matrix). See the
-  entry above on the rejection-rate gate.
+- **The GPU apparent pre-pass no longer copies the column indices twice.** The
+  kernel needs the simplex index of every column, and the host holds it inside
+  16-byte records, so the indices were gathered out into a `Vec<i64>` and then
+  copied AGAIN by `cols.to_vec()` on the way into the driver (which keeps that
+  copy as the device slice's host buffer). Measured at dim=2 on the 1200x1200
+  ASA matrix: the serial gather cost 0.25 s, the second copy 0.23 s, and the
+  PCIe transfer they fed 0.077 s -- two thirds of the cost of getting 807 MB
+  to the GPU was host-side copying. The gather is now parallel and the second
+  copy is gone: the vector is moved into the device slice, so the driver reads
+  it in place. The pre-pass goes from 0.667 s to 0.236 s, the barcode is
+  byte-identical, and the head-to-head against ripser++ goes from 1.050x to
+  0.918x.
+- **The reduction's working column store keeps one bound per NON-EMPTY
+  column.** The store used to hold one `u32` per ENUMERATED column -- the end
+  offset of that column's entries -- and `append_column` ran once per
+  enumerated column: 286,562,199 times at dim=2 on the 1200x1200 ASA matrix.
+  That is 1.15 GB of bounds at dim=2 (403 MB at the T threshold), and every one
+  of those entries was equal to its predecessor's, because the overwhelming
+  majority of the columns are apparent pairs and store nothing at all. The
+  store now keeps one `(column, end offset)` pair per non-empty column --
+  298,670 of them at dim=2, 2.4 MB -- and finds a column's range with a binary
+  search. The semantics are unchanged (`subrange(c)` returns exactly the
+  entries pushed while column `c` was being processed, and an empty column
+  returns an empty range), and the barcode is byte-identical on every arm of
+  the head-to-head. Measured on the ASA matrix, three interleaved repetitions
+  per arm: 1.1% to 2.0% faster on all four arms, and the peak resident set
+  drops by 382 MB (T threshold) to 1.06 GB (cap threshold).
+- **The reduction's working column heap is now a hand-rolled `CoboundaryHeap`.**
+  `std::collections::BinaryHeap::pop` uses `sift_down_to_bottom`, which always
+  walks the hole to the bottom of the tree. A single column's coboundary heap
+  grows to 9-11 million entries (148-185 MB) before it is drained, so the
+  bottom of the tree is a cold cache line on every pop; ripser++ uses
+  `std::priority_queue`, whose `pop` is the classic top-down sift-down with an
+  early exit. The new heap implements that variant and is the default; the
+  `binary-heap` cargo feature restores `BinaryHeap`. The unit test
+  `pop_order_matches_binary_heap` pins the pop order against `BinaryHeap`, and
+  `pops_in_reduction_order` pins the reduction order.
+- **The modulus cancellation in the reduction no longer divides.** The two
+  coefficients are always smaller than the modulus, so a single conditional
+  subtraction replaces the integer division. The coefficients are also summed
+  in `i32` rather than `i16`; the old `i16` addition overflowed for a modulus
+  above 16383.
+- **`import canns_lib` no longer imports scikit-learn eagerly.**
+  `sklearn.metrics.pairwise.pairwise_distances` is only needed when the caller
+  passes points instead of a distance matrix, and importing it at module scope
+  cost 0.96 s on every import.
+- **Maturin builds now enable the `hugepage` cargo feature** on Linux. It marks
+  allocations of 2 MB or more with `MADV_HUGEPAGE`, which is worth 1.24x end to
+  end on the real ASA workload (119.4 s -> 96.0 s, three interleaved passes,
+  bitwise-identical barcode on all 224 regression cells) because the pivot map
+  is a single ~13 GB allocation whose insert cost is dominated by page faults
+  and TLB misses rather than hashing. It is a no-op on non-Linux. Build with
+  `--no-default-features` (or drop the feature) to opt out.
 
 ### Changed
+- **The benchmark harness is a tree, and it has a written rule.** A file in
+  `benchmarks/ripser/` has to be a runner, a library, a driver, a tool or a
+  patch; a probe whose question has been answered is none of those, and it
+  moves to the experiment record. The tree is `harness/` (the runners, with
+  the libraries they import beside them), `drivers/` (the shell helpers),
+  `tools/` (the things that work on tables rather than produce them),
+  `patches/` (applied to a COPY of ripser++) and `archive/` (the probes that
+  still guard something). A runner and the library it imports stay in the same
+  directory, so the imports work wherever the tree is checked out.
+- **The quiet-window gate has one implementation, and it is in the shared
+  core.** The benchmark host is shared, a neighbour's job moves the numbers by
+  up to 40%, and it can flip a comparison's sign -- so a table measured on a
+  busy host is not a table with a caveat, it is not a table. The gate is the
+  number of cores used by processes that are NOT ours, read from `/proc` while
+  the row was being measured, and it excludes our own work by construction, so
+  it needs no allowance for how busy the experiment is. It lives in
+  `harness/bench_core.py` (`foreign_summary` and `batch_is_clean`), and the
+  drivers, the fetch script and the corpus chain all call it. A table with no
+  foreign-load reading FAILS, with the reason spelled out.
+- **The gate tells a crashed row from a timed-out row.** A run that hit the
+  time limit is a legal result -- the runners record it as `TIMEOUT` -- and a
+  table that says "this did not finish inside 600 s" says the truth. A row
+  whose child DIED is not a measurement: it looks like a fast run and it is
+  not. The two are counted separately and reported separately, because a gate
+  that calls both "contaminated" sends the reader to the wrong place.
+- **The runners that produce tables sample the host's load while the child
+  runs.** `harness/bench_core.py`'s `run_measured` wraps a runner's existing
+  call -- the same command, the same `/usr/bin/time` wrapper, the same
+  parsing -- and adds the reading, so the table gains the column that proves
+  it was measured in a quiet window without any of its numbers changing
+  meaning.
+- **One measurement at a time.** The quiet-window gate counts the cores used
+  by processes that are NOT ours, so it cannot see two of OUR OWN measurements
+  colliding -- and that collision moves the numbers just as much as a
+  neighbour's job does. It happened: a measurement driver's parent was stopped
+  while its child kept running, and the child and an unrelated measurement ran
+  together for half an hour. Every measured run now takes an exclusive lock on
+  the box; a second measurement waits for the first rather than running beside
+  it.
+- **The corpus table's arm list has one definition.** It lived in two places
+  -- the corpus' own driver, which is in no repository because the corpus
+  pipeline's licence is still open, and the code here -- and the two copies
+  were coupled by hand. The list is now `harness/corpus_arms.py`, and the
+  driver and the analysis read it. It also says what the arms are FOR: the
+  threshold is a table-level constant, every arm computes the same filtration,
+  and the arm with ripser++ at the cap threshold is deliberately not in it,
+  because it admits every pair in the file as a real edge and so computes a
+  different filtration.
 - **The sync to the benchmark host now deletes what no longer exists here.**
   The host's tree is not a git checkout, so a file that was removed from this
-  repository stayed there and kept running: the nineteen checkers were still
-  on the host after they left the repository, along with a set of
-  AppleDouble files that a macOS checkout leaves next to the real ones and
-  that the sync had been copying as if they were python. The set of files to
-  remove is computed as "what is on the host and not here", never as a
-  hard-coded list of names.
-- **One measurement at a time.** The quiet-window gate counts the cores used
-  by processes that are NOT ours, so it cannot see two of OUR OWN
-  measurements colliding -- and that collision moves the numbers just as much
-  as a neighbour's job does. It happened: a measurement driver's parent was
-  stopped while its child kept running, and the child and an unrelated
-  measurement ran together for half an hour. Every measured run now takes an
-  exclusive lock on the box; a second measurement waits for the first rather
-  than running beside it.
-- **The corpus table's arm list has one definition.** It lived in two
-  places -- the corpus' own driver, which is in no repository because the
-  corpus pipeline's licence is still open, and the checker here -- and the
-  two copies were coupled by hand. The list is now
-  `harness/corpus_arms.py`, and the driver, the checker and the paper's
-  analysis script all read it. It also says what the arms are FOR: the
-  threshold is a table-level constant, every arm computes the same
-  filtration, and the arm with ripser++ at the cap threshold is deliberately
-  not in it, because it admits every pair in the file as a real edge and so
-  computes a different filtration.
-- **The quiet-window gate is now one implementation, used by seventeen of the
-  nineteen checkers.** The benchmark host is shared, a neighbour's job moves
-  the numbers by up to 40%, and it can flip a comparison's sign -- so a table
-  measured on a busy host is not a table with a caveat, it is not a table.
-  Seven checkers had the gate and twelve did not, which meant that twelve
-  tables could not be shown to have been measured on a quiet host at all,
-  and the ones that quote timings were the ones that mattered. The gate is
-  now `checkers/quiet_gate.py`: a table with no foreign-load reading FAILS
-  with the reason spelled out, a row over the threshold fails, and the two
-  checkers that compare bar values and counts do not call it, because those
-  numbers do not depend on how busy the host was.
-- **The runners that produce tables now sample the host's load while the
-  child runs.** `harness/bench_core.py`'s `with_foreign` wraps a runner's
-  existing call -- the same command, the same `/usr/bin/time` wrapper, the
-  same parsing -- and adds the reading, so the table gains the column that
-  proves it was measured in a quiet window without any of its numbers
-  changing meaning. The head-to-head, the filtration sweep, the corpus
-  characterisation, the per-cell corpus cross-check and the A/B tables all
-  go through it now.
-- **The quiet-window chain covers the tables the paper quotes.** The watcher
-  produces the head-to-head, the filtration sweep, the o3 profile, the o3
-  thread scaling and the early-exit A/B in the same window as the rest of the
-  chain; the corpus watcher produces the characterisation and the per-cell
-  cross-check in the corpus window; the fetch script fetches and checks each
-  one with the gate.
-- **The benchmark harness has a shared core.** `harness/bench_core.py` holds
-  the parts every runner does the same way: the host's paths and interpreter,
-  the foreign-load-measured child runner, the parsers for the build's own
-  instrumentation, the CSV writer, the wrong-library guard, and the build
-  identity. They had been re-implemented in every runner, and the copies had
-  drifted -- two `provenance()` functions with different bodies, four parsers
-  with different names. The parent README now has a recipe for adding an
-  experiment.
-- **The benchmark harness is a tree now.** `benchmarks/ripser/` held 81 files in
-  one flat directory: 18 runners, 2 libraries they import, 18 checkers, 7
-  renderers, 7 shell helpers, 3 patches, 10 probes, 3 tables and 3 documents.
-  It is now `harness/` (the runners, with the libraries they import beside
-  them), `checkers/` (one per table), `drivers/` (the shell helpers),
-  `tools/` (the things that work on tables rather than produce them),
-  `patches/` and `archive/` (the probes that answered a question once). A
-  runner and the library it imports stay in the same directory, so the
-  imports work wherever the tree is checked out; the checkers import nothing
-  from each other, so they can still be read one at a time. Every checker
-  derives its grid from its table and carries negative self-tests, and that
-  is unchanged: the same command on the same table produces the same output
-  as before the move, byte for byte.
-- **A checker was added for the reduction-split table.** `check_reduce_split.py`
-  is named in the report and in the renderer, and it did not exist -- so
-  "the two implementations do the same work", which rests entirely on that
-  table, was an unguarded claim. It now is a guarded one: the four count
-  columns (columns reduced, rounds, peak coboundary heap, most rounds in one
-  column) must be identical between the two sides, and five negative
-  self-tests make sure a doctored copy is rejected.
-- **`p21_gate.sh` is archived, not deleted.** It called `compare_p4.py`, which
-  does not exist in this repository, so it could not run. It is in
-  `archive/` with a note saying so.
+  repository stayed there and kept running, and the set of files to remove is
+  now computed as "what is on the host and not here", never as a hard-coded
+  list of names. The sync also skips the AppleDouble files that a macOS
+  checkout leaves next to the real ones, and it copies the RUST sources
+  separately, with an explicit file list, because a benchmark script that did
+  not land fails loudly while an engine file that did not land compiles into a
+  binary that runs and produces numbers, which fails silently.
 
 ### Fixed
 - **Five benchmark runners could not run at all.** The commit that made the
@@ -201,72 +231,60 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   a check that returned non-zero took the whole chain down with it -- and the
   two tables after it were never produced. A step that fails is now recorded
   in the log and the chain goes on to the next one.
-- **The ripser distance-matrix path no longer takes the sparse route on a dense matrix.** `rips_dm_with_callback_and_interval` switched to the sparse distance matrix whenever `threshold < max_finite`. Any pipeline that replaces missing (`+inf`) distances with a finite cap — the ASA pipeline caps them at `2*max_finite + 1` — therefore raised `max_finite` to the cap, and every threshold below the cap satisfied the condition, so an ordinary dense matrix was walked down the sparse path. In this implementation the sparse path is the slower one: the walk counters and the barcode are identical on both routes, but the sparse arm took 4.3x as long, because the dense enumerator rejects a capped pair with a single comparison while the sparse enumerator walks adjacency lists. The decision now requires the matrix to actually contain missing pairs. Measured on the 1200x1200 ASA matrix: the capped arm went from 49.419 s to 11.979 s, the other three arms were unchanged.
-
-### Changed
-- **The GPU apparent pre-pass no longer copies the column indices twice.** The kernel needs the simplex index of every column, and the host holds it inside 16-byte records, so the indices were gathered out into a `Vec<i64>` and then copied AGAIN by `cols.to_vec()` on the way into the driver (which keeps that copy as the device slice's host buffer). Measured at dim=2 on the 1200x1200 ASA matrix: the serial gather cost 0.25 s, the second copy 0.23 s, and the PCIe transfer they fed 0.077 s -- two thirds of the cost of getting 807 MB to the GPU was host-side copying. The gather is now parallel and the second copy is gone: the vector is moved into the device slice, so the driver reads it in place. The pre-pass goes from 0.667 s to 0.236 s, the barcode is byte-identical, and the head-to-head against ripser++ goes from 1.050x to 0.918x.
-- **The reduction's working column store keeps one bound per NON-EMPTY column.** The store used to hold one `u32` per ENUMERATED column -- the end offset of that column's entries -- and `append_column` ran once per enumerated column: 286,562,199 times at dim=2 on the 1200x1200 ASA matrix. That is 1.15 GB of bounds at dim=2 (403 MB at the T threshold), and every one of those entries was equal to its predecessor's, because the overwhelming majority of the columns are apparent pairs and store nothing at all. The store now keeps one `(column, end offset)` pair per non-empty column -- 298,670 of them at dim=2, 2.4 MB -- and finds a column's range with a binary search. The semantics are unchanged (`subrange(c)` returns exactly the entries pushed while column `c` was being processed, and an empty column returns an empty range), and the barcode is byte-identical on every arm of the head-to-head. Measured on the ASA matrix, three interleaved repetitions per arm: 1.1% to 2.0% faster on all four arms, and the peak resident set drops by 382 MB (T threshold) to 1.06 GB (cap threshold).
-- **The reduction's working column heap is now a hand-rolled `CoboundaryHeap`.** `std::collections::BinaryHeap::pop` uses `sift_down_to_bottom`, which always walks the hole to the bottom of the tree. A single column's coboundary heap grows to 9-11 million entries (148-185 MB) before it is drained, so the bottom of the tree is a cold cache line on every pop; ripser++ uses `std::priority_queue`, whose `pop` is the classic top-down sift-down with an early exit. The new heap implements that variant and is the default; the `binary-heap` cargo feature restores `BinaryHeap`. Measured on the ASA matrix: 6.5% faster on the `+inf` input and 6.9% faster on the capped input, three interleaved repetitions each, with a byte-identical barcode.
-  **Unverified in the current delivery**: that run was not kept, so the percentages cannot be pointed at a row of a table. They are re-measured by `benchmarks/ripser/harness/unified_ablation.py`, which turns this one switch off and nothing else; until that table exists, treat them as a claim. The unit test `pop_order_matches_binary_heap` pins the pop order against `BinaryHeap`, and `pops_in_reduction_order` pins the reduction order.
-- **The modulus cancellation in the reduction no longer divides.** The two coefficients are always smaller than the modulus, so a single conditional subtraction replaces the integer division. The coefficients are also summed in `i32` rather than `i16`; the old `i16` addition overflowed for a modulus above 16383.
-- **`import canns_lib` no longer imports scikit-learn eagerly.** `sklearn.metrics.pairwise.pairwise_distances` is only needed when the caller passes points instead of a distance matrix, and importing it at module scope cost 0.96 s on every import.
-- **Maturin builds now enable the `hugepage` cargo feature** on Linux. It marks allocations of 2 MB or more with `MADV_HUGEPAGE`, which is worth 1.24x end to end on the real ASA workload (119.4 s -> 96.0 s, three interleaved passes, bitwise-identical barcode on all 224 regression cells) because the pivot map is a single ~13 GB allocation whose insert cost is dominated by page faults and TLB misses rather than hashing. It is a no-op on non-Linux. Build with `--no-default-features` to opt out.
+- **The ripser distance-matrix path no longer takes the sparse route on a
+  dense matrix.** `rips_dm_with_callback_and_interval` switched to the sparse
+  distance matrix whenever `threshold < max_finite`. Any pipeline that
+  replaces missing (`+inf`) distances with a finite cap -- the ASA pipeline
+  caps them at `2*max_finite + 1` -- therefore raised `max_finite` to the cap,
+  and every threshold below the cap satisfied the condition, so an ordinary
+  dense matrix was walked down the sparse path. In this implementation the
+  sparse path is the slower one: the walk counters and the barcode are
+  identical on both routes, but the sparse arm took 4.3x as long, because the
+  dense enumerator rejects a capped pair with a single comparison while the
+  sparse enumerator walks adjacency lists. The decision now requires the
+  matrix to actually contain missing pairs. Measured on the 1200x1200 ASA
+  matrix: the capped arm went from 49.419 s to 11.979 s, the other three arms
+  were unchanged.
 
 ### Removed
-- **The paper's artefact layer left the repository.** The work was re-scoped
-  from "write a paper" to "make the engine fast and keep the measurements
-  honest", and the machinery that only served the paper went with it:
-  `benchmarks/ripser/checkers/` (nineteen checkers, most of whose rules
-  enforced a *claim* rather than a correctness property), the table-to-
-  checker map `RESULTS-20261020.md`, the five report renderers
-  (`render_ripser_report.py`, `render_clean_md.py`, `render_final_md.py`,
-  `render_gap_md.py`, `render_characterization_section.py`), the shuffle
-  protocol `ASA_SHUFFLE.md`, and the three result tables that had been
-  committed to the repository (`scale_scan.csv`, `cpu_giotto.csv`,
-  `determinism_check.csv`). The paper's drafts, its report and the notes
-  about them were moved to `paper-parked/` in the experiment record, where
-  they are untouched. The runners, the drivers and the tools stay: they are
-  how the measurements are made. What the checkers did that still has to
-  happen -- the barcode of the arms of a comparison must agree, and a table
-  must be able to show it was measured on a quiet host -- now lives with the
-  runners that produce the table and in `harness/bench_core.py`.
-- **Eleven one-off probes left the benchmark tree.** `benchmarks/ripser/archive/`
-  held probes that had answered a question once and guarded nothing since:
-  `inf_form_probe.py`, `thresh_probe.py`, `loop_probe.py`, `sparse_paths.py`,
-  `two_site_ab.py`, `onepass_ab.py`, `pinned_cache_ab.py`, `h2h_child.py` and
-  `p21_gate.sh`. The rule is now written down in the parent README: a file in
-  this repository has to be a runner, a library, a driver, a tool or a patch,
-  and a probe whose question is answered is none of those. They were not
-  deleted -- they are in the paper project's process record and in this
-  repository's git history. `h2h_child.py` was a copy of a file that lives in
-  the paper project, and the runners that used it pointed at the copy there,
-  so nothing ever ran this one; `p21_gate.sh` called `compare_p4.py`, which
-  does not exist in this repository, so it could not run at all.
-  `phase_baseline.py` and `progress_bar_impact.py` left the tree for the same
-  reason, and `benchmarks/ripser/analysis/` (one sample PNG) with them.
-- **`comprehensive_benchmark.py` and `analysis_results.py` moved into the
-  tree.** They were sitting in `benchmarks/ripser/`'s top level; the first is
-  a runner and the second is a tool, so they are now `harness/` and `tools/`.
-  The repository's own README attributes its headline performance numbers to
-  the first one, so it is part of the method and it is kept -- only its
-  address changed.
+- **The benchmark tree's top level is gone.** The two scripts that sat in
+  `benchmarks/ripser/`'s top level moved into it: `comprehensive_benchmark.py`
+  is a runner and is now `harness/`, `analysis_results.py` is a tool and is now
+  `tools/`. The shuffle protocol `ASA_SHUFFLE.md`, the two one-off probes
+  `phase_baseline.py` and `progress_bar_impact.py`, and the sample PNG in
+  `analysis/` left with them.
 
 ### Added
-- **`benchmarks/ripser/tools/smoke_children.py`** — a static check of the
-  embedded child scripts: for every runner, it reports the names a child
-  uses but never binds. It needs no numpy, no site directory and no device,
-  so it runs in a second, and it runs *before* a measurement rather than
-  after it. It exists because five runners were broken in exactly that way
-  and the only symptom was a table full of crashes.
-- **The quiet-window gate has one implementation.** It was three copies of
-  the same inline python, one in each driver that asks the question, and the
-  copies had already drifted. It is now `harness/bench_core.py`'s
-  `foreign_summary` and `batch_is_clean`, and the drivers, the fetch script
-  and the corpus chain all call it. The gate also tells a crashed row from a
-  busy row now: a batch whose rows did not finish says so, instead of being
-  reported as "contaminated" and sending the reader looking at the host.
-- **`gpu` cargo feature** — an opt-in GPU apparent-pair pre-pass, off by default and **not in the release build**: `[tool.maturin]` enables only `parallel`, `hugepage` and `extension-module`, so the published wheels contain no CUDA code at all and the pre-pass runs on the CPU. The GPU pre-pass is a build, not a download: `maturin develop --release --features parallel,hugepage,extension-module,gpu` (keep `extension-module` — it is what makes PyO3 produce a cdylib for Python). The build needs no CUDA toolkit: `build.rs` compiles `kernel/ripser_kernels.cu` with `nvcc` and embeds the cubin when a toolkit is present, and the driver JIT-compiles the same file through NVRTC when it is not. A run with no usable device falls back to the CPU pre-pass, and the barcode does not change. Measured on an A100-SXM4-80GB with the same 2.9e8 columns as the ASA matrix: the CPU pre-pass takes 12.0-15.5 s against 0.093 s for the GPU kernel plus 0.095 s for the pinned readback.
-- **A reproducible head-to-head harness against ripser++** in `benchmarks/ripser/`: the runner, the load characterisation over 97 matrices, the standard suite on ripser++'s own datasets, the scale scan, the unified ablation, and a checker for each. Every table is produced by a script and every checker derives its own grid from the table rather than from a constant, so a missing cell is a failure and not a silent hole; each checker also carries negative self-tests that mutate a copy of the table and require the checker to notice. The tables are not committed: the grid-cell corpus behind two of them has an unsettled licence, so only the scripts and the aggregate characterisation are published until it is. `benchmarks/ripser/RESULTS-20261020.md` maps each table to its checker.
+- **A reproducible head-to-head harness against ripser++** in
+  `benchmarks/ripser/`: the runner, the load characterisation over the 97
+  grid-cell matrices, the standard suite on ripser++'s own datasets, the scale
+  scan and the unified ablation. Every table is produced by a script, and
+  every row records the number of cores used by processes that are not ours
+  while that row was being measured, so a table that cannot be shown to have
+  been measured on a quiet host is not a table. The tables are not committed:
+  the grid-cell corpus behind two of them has an unsettled licence, so only the
+  scripts are published until it is.
+- **`gpu` cargo feature** -- an opt-in GPU apparent-pair pre-pass, off by
+  default and **not in the release build**: `[tool.maturin]` enables only
+  `parallel`, `hugepage` and `extension-module`, so the published wheels
+  contain no CUDA code at all and the pre-pass runs on the CPU. The GPU
+  pre-pass is a build, not a download:
+  `maturin develop --release --features parallel,hugepage,extension-module,gpu`
+  (keep `extension-module` -- it is what makes PyO3 produce a cdylib for
+  Python). A run with no usable device falls back to the CPU pre-pass, and the
+  barcode does not change. Measured on an A100-SXM4-80GB with the same
+  2.9e8 columns as the ASA matrix: the CPU pre-pass takes 12.0-15.5 s against
+  0.093 s for the GPU kernel plus 0.095 s for the pinned readback. NOTE that
+  building this feature currently needs a CUDA toolkit: our own `build.rs`
+  compiles the kernel with `nvcc` only when one is present, but the `cudarc`
+  dependency's build script runs `nvcc --version` to detect the CUDA version
+  and fails without it.
+- **`benchmarks/ripser/tools/smoke_children.py`** -- a static check of the
+  embedded child scripts: for every runner, it reports the names a child uses
+  but never binds. It needs no numpy, no site directory and no device, so it
+  runs in a second, and it runs *before* a measurement rather than after it.
+  It exists because five runners were broken in exactly that way and the only
+  symptom was a table full of crashes.
 
 ## [0.11.0] - 2026-09-23
 

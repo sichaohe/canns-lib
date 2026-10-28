@@ -62,17 +62,21 @@ path, limit, module = sys.argv[1], float(sys.argv[2]), sys.argv[3]
 sys.path.insert(0, module)
 import bench_core
 try:
-    worst, missing, broken, rows = bench_core.foreign_summary(path)
+    worst, missing, broken, timed_out, rows = bench_core.foreign_summary(path)
 except OSError:
     print("no table to check")
     sys.exit(2)
 print("worst foreign load in the batch: mean %.3f cores (%d row(s) without a "
-      "reading, %d broken row(s), %d rows)" % (worst, missing, broken, rows))
+      "reading, %d broken row(s), %d timed out, %d rows)"
+      % (worst, missing, broken, timed_out, rows))
 if broken:
     print("rows whose run did not finish: %d -- this is a BUG, not a busy host"
           % broken)
 if missing:
     print("rows without a foreign-load reading: %d" % missing)
+if timed_out:
+    print("rows that hit the time limit: %d -- a legal result, recorded as such"
+          % timed_out)
 if broken or missing:
     sys.exit(1)
 sys.exit(0 if worst <= limit else 1)

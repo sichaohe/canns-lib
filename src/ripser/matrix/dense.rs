@@ -84,21 +84,20 @@ pub fn set_rejection_fraction(fraction: f64) {
 /// With neither, the data decides.
 fn early_exit_allowed() -> bool {
     static MODE: OnceLock<EarlyExitMode> = OnceLock::new();
-    let mode = *MODE.get_or_init(|| {
-        match std::env::var("CANNS_RIPSER_COFACET_EARLY_EXIT") {
-            Ok(v) => match v.trim() {
-                "0" | "false" | "False" | "no" | "No" | "off" | "OFF" => EarlyExitMode::ForcedOff,
-                "1" | "true" | "True" | "yes" | "Yes" | "on" | "ON" => EarlyExitMode::ForcedOn,
-                _ => EarlyExitMode::Gated,
-            },
-            Err(_) => EarlyExitMode::Gated,
-        }
+    let mode = *MODE.get_or_init(|| match std::env::var("CANNS_RIPSER_COFACET_EARLY_EXIT") {
+        Ok(v) => match v.trim() {
+            "0" | "false" | "False" | "no" | "No" | "off" | "OFF" => EarlyExitMode::ForcedOff,
+            "1" | "true" | "True" | "yes" | "Yes" | "on" | "ON" => EarlyExitMode::ForcedOn,
+            _ => EarlyExitMode::Gated,
+        },
+        Err(_) => EarlyExitMode::Gated,
     });
     match mode {
         EarlyExitMode::ForcedOn => true,
         EarlyExitMode::ForcedOff => false,
         EarlyExitMode::Gated => {
-            REJECTION_FRACTION.load(std::sync::atomic::Ordering::Relaxed) >= EARLY_EXIT_REJECTION_GATE
+            REJECTION_FRACTION.load(std::sync::atomic::Ordering::Relaxed)
+                >= EARLY_EXIT_REJECTION_GATE
         }
     }
 }

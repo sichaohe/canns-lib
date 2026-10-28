@@ -125,6 +125,24 @@ ASA_MATRIX = "/home/sichaohe/ph_work/ph_dm_1200.npy"
 # out of a two-minute run shows up as 0.004, which is what it is worth.
 FOREIGN_GATE = 0.25
 
+# WHAT A ROW MAY SAY AND STILL BE A MEASUREMENT.
+#
+# The runners record how a row ended in one of two columns, and the two
+# columns do not use the same words:
+#
+#   `error`   -- set by the scale scan: "" | "TIMEOUT" | "CRASH"
+#   `verdict` -- set by the other runners: "OK" | "TIMEOUT" | "MISSING" |
+#                "SAME_BARCODE" | "BADCODEC" | "BARCODE_MISMATCH" |
+#                "NOGPU" | "RC=<code>"
+#
+# A timeout is a LEGAL RESULT in both: the run hit the time limit and the
+# table says so. Everything else in those lists is a row that did not measure
+# what the table is about -- a crashed child, a missing run, a barcode that
+# does not match, a build without the feature, a non-zero return code -- and
+# those are failures.
+LEGAL_ERRORS = {"", "TIMEOUT"}
+LEGAL_VERDICTS = {"", "OK", "TIMEOUT", "SAME_BARCODE"}
+
 # A counter that makes each measured run's output file name unique. It is
 # not a lock: it only stops two overlapping runs from writing to the same
 # file.
@@ -253,28 +271,37 @@ def quiet_enough(measured, gate=FOREIGN_GATE):
 
 
 def foreign_summary(path):
-    """The foreign-load picture of a whole table: (worst, missing, broken, rows).
+    """The foreign-load picture of a whole table:
+    (worst, missing, broken, timed_out, rows).
 
     THE ONE PLACE THE GATE IS COMPUTED. The drivers ask the same question of
     a table -- "was every row measured on a quiet host?" -- and they used to
     answer it with three copies of the same inline python, which is how copies
     drift. `worst` is the largest MEAN foreign load over a row, `missing` is
-    the number of rows with no reading at all, and `broken` is the number of
-    rows whose run did not finish.
+    the number of rows with no reading at all, `broken` is the number of rows
+    whose run did not finish, and `timed_out` is the number of rows that hit
+    the time limit.
 
     A row with no reading is not a quiet row. It is a row whose host state is
     unknown, and the honest answer to "was this measured on a quiet host" is
     "we do not know" -- which is a failure, not a footnote.
 
-    `broken` is counted separately because a crashed run and a busy host are
-    DIFFERENT faults, and a gate that reports both as "contaminated" sends the
-    reader looking at the wrong one: a scale scan whose nine rows crashed
+    `broken` and `timed_out` are counted SEPARATELY, and a timeout is NOT a
+    broken row. A timeout is a legal result: the runners record it as such
+    (`TIMEOUT` in the `error` column, `TIMEOUT` in the `verdict` column), and
+    a table that says "this run did not finish inside 600 s" is a table that
+    says the truth. What is not legal is a row that looks like a fast run
+    because the child died -- and a gate that reports both as "contaminated"
+    sends the reader to the wrong place: a scale scan whose nine rows crashed
     because the child script had a NameError was reported as "contaminated",
-    which points at the host instead of at the bug.
+    which points at the host instead of at the bug, and a scale scan whose
+    ripser++ arm ran out of time on a 16 GB device was thrown away for the
+    same reason, with the good rows in it.
     """
     worst = 0.0
     missing = 0
     broken = 0
+    timed_out = 0
     rows = 0
     with open(path, newline="") as fh:
         for r in csv.DictReader(fh):
@@ -287,11 +314,16 @@ def foreign_summary(path):
                     worst = max(worst, float(raw))
                 except ValueError:
                     missing += 1
-            if (r.get("error") or "").strip():
+            err = (r.get("error") or "").strip()
+            verdict = (r.get("verdict") or "").strip()
+            if err.upper() == "TIMEOUT" or verdict.upper() == "TIMEOUT":
+                # A legal result: the run hit the time limit and said so.
+                timed_out += 1
+            elif err and err.upper() not in LEGAL_ERRORS:
                 broken += 1
-            elif (r.get("verdict") or "").strip() not in ("", "OK"):
+            elif verdict and verdict.upper() not in LEGAL_VERDICTS:
                 broken += 1
-    return worst, missing, broken, rows
+    return worst, missing, broken, timed_out, rows
 
 
 def batch_is_clean(path, limit=FOREIGN_GATE):
@@ -299,10 +331,13 @@ def batch_is_clean(path, limit=FOREIGN_GATE):
 
     The batch is ALL OR NOTHING: a neighbour's job can start in the middle of
     a measurement, and half a table measured under load is worse than no
-    table, because it looks like a table.
+    table, because it looks like a table. A row that CRASHED is also a
+    failure -- a row that looks like a fast run because the child died is not
+    a measurement. A row that TIMED OUT is not: it is a result, and it says
+    so.
     """
     try:
-        worst, missing, broken, rows = foreign_summary(path)
+        worst, missing, broken, _timed_out, rows = foreign_summary(path)
     except OSError:
         return False
     if rows == 0:

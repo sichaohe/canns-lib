@@ -265,8 +265,7 @@ mod imp {
     /// The device and the kernel, initialised. Every step is named: a
     /// swallowed `.ok()?` chain makes a silent fallback indistinguishable
     /// from "the GPU was never tried".
-    fn init_device(
-    ) -> Result<(std::sync::Arc<CudaDevice>, cudarc::driver::CudaFunction), String> {
+    fn init_device() -> Result<(std::sync::Arc<CudaDevice>, cudarc::driver::CudaFunction), String> {
         if pinned_api().is_none() {
             return Err("libcuda.so.1 could not be dlopen'd".to_string());
         }
