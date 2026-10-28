@@ -118,7 +118,7 @@ does.
 in a string, and a name it uses but never imports fails at RUN time -- inside
 a measurement, on the host, after the quiet window has been waited for. The
 static check catches that class of bug in a second, before any measurement:
-`tools/smoke_children.py`.
+`tools/smoke_runners.py`.
 
 **3. Add the runner to `drivers/sync_to_server.sh`.** The file list there is
 explicit on purpose: a glob would silently stop covering a file that was
@@ -171,7 +171,8 @@ Run by hand: `make_ripserpp_input.py` (writes the input file for ripser++),
 `cross_batch.py` (compares two copies of the same table cell by cell -- the
 second, independent line of evidence that the host was quiet),
 `reduce_split.py` (our reduction against ripser++'s, split by stage),
-`smoke_children.py` (the static check of the embedded child scripts),
+`smoke_runners.py` (the static check of the runners and of the child
+scripts inside them),
 `analysis_results.py` (turns `comprehensive_benchmark.py`'s raw output into
 the plots and the summary), `summarize_characterization.py` and
 `plot_characterization.py` (the characterisation table to its distributions),

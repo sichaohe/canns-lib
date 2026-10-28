@@ -5,6 +5,24 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Fixed
+- **Three more benchmark runners could not run at all.** The commit that made
+  the runners sample the host's load while the child runs added
+  `import bench_core` to the CHILD script of three runners, and the parents
+  never got it -- so `bench_core.with_foreign` raised a NameError and the
+  runner died before it measured anything. One of them is the filtration
+  sweep, which is why its table had not been regenerated since that commit:
+  a broken runner looks exactly like a table that stopped appearing.
+- **The static check now looks at the runners themselves, not only at the
+  child scripts inside them.** `tools/smoke_children.py` is now
+  `tools/smoke_runners.py`, and it checks both programs: the child script in
+  the string AND the runner module that holds it. It is what found the three
+  runners above, and it is what would have found the five that the 0.12.0
+  release fixed. It still needs no numpy, no site directory and no device,
+  so it runs in a second, before a measurement rather than after it.
+
 ## [0.12.0] - 2026-10-28
 
 ### Performance

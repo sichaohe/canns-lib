@@ -60,6 +60,14 @@ REF_MD5 = ("ee1f5283091dd645a3dd53e6f1a7eac6:"
            "2d018d8fe9c1895b1b74f837af59ed20")
 REF_BARS = "1195|481|58"
 
+# The shared core: the host's paths, the foreign-load-measured child
+# runner, the parsers, the CSV writer and the build identity. This
+# import has to be HERE, in the parent's scope: the one inside the
+# child script string below is the child's, and the parent does not
+# get it -- so `bench_core.with_foreign` raised NameError and the
+# runner died before it measured anything.
+import bench_core
+
 CHILD = r'''
 import hashlib, sys, time
 import numpy as np

@@ -51,7 +51,7 @@ drivers/quiet_window_watch.sh drivers/corpus_quiet_run.sh \
 drivers/build_abl_variants.sh drivers/build_measure_sites.sh \
 drivers/measure_chain.sh \
 drivers/fetch_clean_tables.sh drivers/sync_engine_to_server.sh \
-tools/cross_batch.py tools/reduce_split.py tools/smoke_children.py"
+tools/cross_batch.py tools/reduce_split.py tools/smoke_runners.py"
 
 # Directories to expand, one file per line, relative to the tree.
 DIRS="harness tools patches archive"
