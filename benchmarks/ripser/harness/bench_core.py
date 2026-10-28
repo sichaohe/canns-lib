@@ -252,6 +252,64 @@ def quiet_enough(measured, gate=FOREIGN_GATE):
         return False
 
 
+def foreign_summary(path):
+    """The foreign-load picture of a whole table: (worst, missing, broken, rows).
+
+    THE ONE PLACE THE GATE IS COMPUTED. The drivers ask the same question of
+    a table -- "was every row measured on a quiet host?" -- and they used to
+    answer it with three copies of the same inline python, which is how copies
+    drift. `worst` is the largest MEAN foreign load over a row, `missing` is
+    the number of rows with no reading at all, and `broken` is the number of
+    rows whose run did not finish.
+
+    A row with no reading is not a quiet row. It is a row whose host state is
+    unknown, and the honest answer to "was this measured on a quiet host" is
+    "we do not know" -- which is a failure, not a footnote.
+
+    `broken` is counted separately because a crashed run and a busy host are
+    DIFFERENT faults, and a gate that reports both as "contaminated" sends the
+    reader looking at the wrong one: a scale scan whose nine rows crashed
+    because the child script had a NameError was reported as "contaminated",
+    which points at the host instead of at the bug.
+    """
+    worst = 0.0
+    missing = 0
+    broken = 0
+    rows = 0
+    with open(path, newline="") as fh:
+        for r in csv.DictReader(fh):
+            rows += 1
+            raw = (r.get("foreign_cpu") or "").strip()
+            if not raw:
+                missing += 1
+            else:
+                try:
+                    worst = max(worst, float(raw))
+                except ValueError:
+                    missing += 1
+            if (r.get("error") or "").strip():
+                broken += 1
+            elif (r.get("verdict") or "").strip() not in ("", "OK"):
+                broken += 1
+    return worst, missing, broken, rows
+
+
+def batch_is_clean(path, limit=FOREIGN_GATE):
+    """Whether a whole table can be shown to have been measured on a quiet host.
+
+    The batch is ALL OR NOTHING: a neighbour's job can start in the middle of
+    a measurement, and half a table measured under load is worse than no
+    table, because it looks like a table.
+    """
+    try:
+        worst, missing, broken, rows = foreign_summary(path)
+    except OSError:
+        return False
+    if rows == 0:
+        return False
+    return missing == 0 and broken == 0 and worst <= limit
+
+
 def lib_guard(site):
     """The library that a site directory actually provides, or None.
 

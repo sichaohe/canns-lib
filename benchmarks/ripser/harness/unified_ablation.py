@@ -66,6 +66,11 @@ import time
 # How much of the box was used by somebody ELSE while each variant ran --
 # see foreign_cpu.py for why the load average cannot answer it.
 import foreign_cpu
+# The measurement lock lives in bench_core, and this import has to be in the
+# PARENT's scope. The one inside the child script string further down is the
+# child's: the parent never gets it, so `bench_core.measurement_lock` raised
+# NameError and the run died before it measured anything.
+import bench_core
 
 PY = "/home/sichaohe/miniconda3/envs/rl/bin/python"
 ASA_NPY = "/home/sichaohe/ph_work/ph_dm_1200.npy"
@@ -105,9 +110,6 @@ import numpy as np
 site, thresh, mode = sys.argv[1], float(sys.argv[2]), sys.argv[3]
 sys.path.insert(0, site)
 from canns_lib.ripser import ripser
-
-sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-import bench_core
 d = np.load("/home/sichaohe/ph_work/ph_dm_1200.npy")
 np.fill_diagonal(d, 0.0)
 if mode == "capped":

@@ -58,6 +58,11 @@ import numpy as np
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import foreign_cpu
+# The measurement lock lives in bench_core, and this import has to be in the
+# PARENT's scope. The one inside the child script string further down is the
+# child's: the parent never gets it, so `bench_core.measurement_lock` raised
+# NameError and the run died before it measured anything.
+import bench_core
 from validate_gridcells import match_bars  # the tolerance matcher, shared
 
 PP = "/home/sichaohe/ph_work/ripserpp/ripserplusplus/build3/ripser++"
@@ -288,9 +293,6 @@ site, path, kind, maxdim, thresh, coeff = (sys.argv[1], sys.argv[2], sys.argv[3]
                                             int(sys.argv[6]))
 sys.path.insert(0, site)
 from canns_lib.ripser import ripser
-
-sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-import bench_core
 if kind == "points":
     X = np.loadtxt(path, dtype=np.float64)
     dmat = False
