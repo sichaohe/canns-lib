@@ -1,7 +1,7 @@
 # `benchmarks/ripser/archive/`
 
-The probes that **still guard something**. They are not tables, and they do
-not guard a table, so they are not in `checkers/`.
+The probes that **still guard something**. They are not runners and they do
+not produce a table, so they are not in `harness/`.
 
 | script | what it guards |
 |---|---|

@@ -55,27 +55,25 @@ print('%.3f' % foreign_cpu.foreign_cores(1.0))
 }
 
 batch_is_clean() {
-    python3 - "$1" "$MAX_FOREIGN" <<'PY'
-import csv, sys
-path, limit = sys.argv[1], float(sys.argv[2])
-worst, missing = 0.0, 0
+    # The gate lives in bench_core: one implementation, used by every driver.
+    python3 - "$1" "$MAX_FOREIGN" "$MODULE" <<'PY'
+import sys
+path, limit, module = sys.argv[1], float(sys.argv[2]), sys.argv[3]
+sys.path.insert(0, module)
+import bench_core
 try:
-    with open(path, newline="") as fh:
-        for r in csv.DictReader(fh):
-            raw = (r.get("foreign_cpu") or "").strip()
-            if not raw:
-                missing += 1
-                continue
-            try:
-                worst = max(worst, float(raw))
-            except ValueError:
-                missing += 1
+    worst, missing, broken, rows = bench_core.foreign_summary(path)
 except OSError:
     print("no table to check")
     sys.exit(2)
-print("worst foreign load in the batch: mean %.3f cores (%d row(s) without "
-      "a reading)" % (worst, missing))
+print("worst foreign load in the batch: mean %.3f cores (%d row(s) without a "
+      "reading, %d broken row(s), %d rows)" % (worst, missing, broken, rows))
+if broken:
+    print("rows whose run did not finish: %d -- this is a BUG, not a busy host"
+          % broken)
 if missing:
+    print("rows without a foreign-load reading: %d" % missing)
+if broken or missing:
     sys.exit(1)
 sys.exit(0 if worst <= limit else 1)
 PY
@@ -96,11 +94,6 @@ for i in $(seq 1 1440); do
         GCA_OUT="$OUT" python3 "$DRIVER" > /tmp/gca_clean.log 2>&1
         if batch_is_clean "$OUT"; then
             echo "$(date +%Y-%m-%dT%H:%M:%S) clean: $OUT" >> "$LOG"
-            # the checker needs the corpus, so it runs where the corpus is
-            python3 benchmarks/ripser/checkers/check_gridcells_bench.py "$OUT" \
-                --max-foreign-cpu "$MAX_FOREIGN" --self-test \
-                > /tmp/gca_clean_check.log 2>&1
-            echo "$(date +%Y-%m-%dT%H:%M:%S) checked: $OUT" >> "$LOG"
         else
             mv "$OUT" "$OUT.contaminated"
             echo "$(date +%Y-%m-%dT%H:%M:%S) CONTAMINATED: $OUT -> $OUT.contaminated" >> "$LOG"
@@ -114,18 +107,20 @@ for i in $(seq 1 1440); do
         # the corpus benchmark, which is the point: the window is the scarce
         # resource, and three tables that disagree about how busy the host
         # was are worse than one that agrees.
+        #
+        # ONE FAILURE DOES NOT KILL THE REST. A step that fails is recorded
+        # in the log and the chain goes on to the next one: a checker that
+        # returned non-zero used to take the whole chain down with it under
+        # `set -e`, so the two tables after it were never produced.
         for spec in \
-            "characterize_gridcells:/tmp/characterize_gridcells_clean.csv:benchmarks/ripser/harness/characterize_gridcells.py --site /home/sichaohe/canns-lib-dev/site_ship6 --out /tmp/characterize_gridcells_clean.csv:benchmarks/ripser/checkers/check_characterize_gridcells.py" \
-            "gridcells_validation:/tmp/gridcells_validation_clean.csv:benchmarks/ripser/harness/validate_gridcells.py --site /home/sichaohe/canns-lib-dev/site_cpu_final --reps 2 --out /tmp/gridcells_validation_clean.csv:benchmarks/ripser/checkers/check_validate_gridcells.py"
+            "characterize_gridcells:/tmp/characterize_gridcells_clean.csv:benchmarks/ripser/harness/characterize_gridcells.py --site /home/sichaohe/canns-lib-dev/site_ship6 --out /tmp/characterize_gridcells_clean.csv" \
+            "gridcells_validation:/tmp/gridcells_validation_clean.csv:benchmarks/ripser/harness/validate_gridcells.py --site /home/sichaohe/canns-lib-dev/site_cpu_final --reps 2 --out /tmp/gridcells_validation_clean.csv"
         do
-            IFS=: read -r tag out cmd checker <<<"$spec"
+            IFS=: read -r tag out cmd <<<"$spec"
             rm -f "$out"
             python3 $cmd > "/tmp/${tag}_clean.log" 2>&1
             if batch_is_clean "$out"; then
                 echo "$(date +%Y-%m-%dT%H:%M:%S) clean: $out" >> "$LOG"
-                python3 "$checker" "$out" --max-foreign-cpu "$MAX_FOREIGN" \
-                    > "/tmp/${tag}_clean_check.log" 2>&1
-                echo "$(date +%Y-%m-%dT%H:%M:%S) checked: $out" >> "$LOG"
             else
                 mv "$out" "$out.contaminated"
                 echo "$(date +%Y-%m-%dT%H:%M:%S) CONTAMINATED: $out -> $out.contaminated" >> "$LOG"

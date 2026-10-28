@@ -33,6 +33,12 @@ DST=${CANNS_BENCH_DIR:-/home/sichaohe/canns-lib-dev/benchmarks/ripser}
 # that property without a thirty-line list that has to be edited every time
 # a checker is added, and a file that no longer exists is still noticed
 # (the expansion would find nothing, and the count would not match).
+#
+# DOT FILES ARE SKIPPED. A macOS checkout carries `._name` AppleDouble files
+# next to the real ones, and `find -name "*.py"` matches them: they are
+# binary resource forks, they are not python, and one of them made the
+# child-script check fail with a decoding error on a machine whose locale is
+# not UTF-8.
 FILES="harness/scale_scan.py harness/standard_bench.py harness/unified_ablation.py \
 harness/t_arm_equivalence.py harness/foreign_cpu.py harness/o3_profile.py \
 harness/o3_cpu_scaling.py harness/clean_h2h.py harness/h2h_coeff_ab.py \
@@ -45,19 +51,10 @@ drivers/quiet_window_watch.sh drivers/corpus_quiet_run.sh \
 drivers/build_abl_variants.sh drivers/build_measure_sites.sh \
 drivers/measure_chain.sh \
 drivers/fetch_clean_tables.sh drivers/sync_engine_to_server.sh \
-tools/cross_batch.py tools/reduce_split.py \
-checkers/check_scale_scan.py checkers/check_standard_bench.py \
-checkers/check_unified_ablation.py checkers/check_gridcells_bench.py \
-checkers/check_clean_h2h.py checkers/check_nsfix_ab.py \
-checkers/check_bounds_ab.py checkers/check_validate_gridcells.py \
-checkers/check_characterize_gridcells.py checkers/check_o3_profile.py \
-checkers/check_o3_cpu_scaling.py checkers/check_h2h_coeff_ab.py \
-checkers/check_reduce_split.py checkers/check_cofacet_early_exit_ab.py \
-checkers/check_filtration_sweep.py checkers/check_final_h2h.py \
-checkers/check_gap.py checkers/quiet_gate.py"
+tools/cross_batch.py tools/reduce_split.py tools/smoke_children.py"
 
 # Directories to expand, one file per line, relative to the tree.
-DIRS="harness checkers tools"
+DIRS="harness tools patches archive"
 
 SSH="ssh -i $KEY -p $PORT -o ConnectTimeout=15 sichaohe@$HOST"
 
@@ -70,7 +67,7 @@ for f in $FILES; do
     SYNC_FILES="$SYNC_FILES $f"
 done
 for d in $DIRS; do
-    for f in $(cd "$SRC" && find "$d" -type f -name "*.py" | sort); do
+    for f in $(cd "$SRC" && find "$d" -type f -name "*.py" ! -name "._*" | sort); do
         SYNC_FILES="$SYNC_FILES $f"
     done
 done
@@ -114,3 +111,52 @@ for f in $SYNC_FILES; do
     printf "  ok  %-34s %8s bytes  %s\n" "$f" "$remote_size" "$remote_md5"
 done
 echo "all $(( $(echo $SYNC_FILES | wc -w) )) files synced and verified"
+
+# THE FILES THAT NO LONGER EXIST HERE ARE DELETED THERE.
+#
+# The host's tree is not a git checkout, so a file that was deleted here
+# stays there until it is removed explicitly -- and a stale copy is worse
+# than a missing one: it is a program that still runs. The set is computed
+# as "what is on the host and not here", never as a hard-coded list of names,
+# so a file that is renamed or dropped is caught whichever way it happened.
+#
+# The path is quoted for the REMOTE shell, because it comes from the host's
+# own directory listing.
+q() { printf "'%s'" "$(printf '%s' "$1" | sed "s/'/'\\\\''/g")"; }
+
+# BOTH LISTS ARE SORTED IN THE C LOCALE. `comm` is a binary search over two
+# sorted files, so the two files have to be sorted the SAME way: the laptop
+# and the host sort in different locales by default, and with two different
+# collations `comm` pairs up the first line and then stops -- so the
+# cleanup silently removed one file out of forty-six.
+#
+# THE REMOTE LISTING DOES NOT SKIP THE DOT FILES. A macOS checkout carries
+# `._name` AppleDouble files next to the real ones, and the sync copied them
+# to the host as if they were python; they are binary resource forks, they
+# are not python, and one of them made the child-script check fail with a
+# decoding error on a machine whose locale is not UTF-8. They are not here,
+# so the cleanup removes them.
+(cd "$SRC" && find harness drivers tools patches archive -type f ! -name '._*' \
+    | LC_ALL=C sort) > /tmp/_sync_local_files.txt
+$SSH "cd $(q "$DST") && find . -type f ! -path '*/__pycache__/*' | sed 's|^\./||' | LC_ALL=C sort" \
+    > /tmp/_sync_remote_files.txt
+removed=0
+while IFS= read -r rel; do
+    [ -z "$rel" ] && continue
+    echo "  removing $rel (it no longer exists here)"
+    # STDIN IS CLOSED FOR THE SSH. `ssh` forwards its standard input to the
+    # remote host, and this loop is reading the list of files to remove from
+    # its own standard input -- so the first ssh ate the rest of the list and
+    # the cleanup removed exactly one file, every time.
+    $SSH "rm -f -- $(q "$DST/$rel")" < /dev/null
+    removed=$((removed + 1))
+done < <(LC_ALL=C comm -13 /tmp/_sync_local_files.txt /tmp/_sync_remote_files.txt)
+
+# THE BYTECODE CACHES GO TOO. They are regenerated on the next run and they
+# are not tracked anywhere, so a stale one is only ever a trap.
+$SSH "cd $(q "$DST") && find . -type d -name __pycache__ -prune -exec rm -rf {} +" < /dev/null
+if [ "$removed" -eq 0 ]; then
+    echo "  nothing to remove: the host's tree and this one agree"
+else
+    echo "  removed $removed file(s) from the host"
+fi

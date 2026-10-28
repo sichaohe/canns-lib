@@ -57,6 +57,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   covers both rejections, and the `-inf` case with them.
 
 ### Changed
+- **The sync to the benchmark host now deletes what no longer exists here.**
+  The host's tree is not a git checkout, so a file that was removed from this
+  repository stayed there and kept running: the nineteen checkers were still
+  on the host after they left the repository, along with a set of
+  AppleDouble files that a macOS checkout leaves next to the real ones and
+  that the sync had been copying as if they were python. The set of files to
+  remove is computed as "what is on the host and not here", never as a
+  hard-coded list of names.
 - **One measurement at a time.** The quiet-window gate counts the cores used
   by processes that are NOT ours, so it cannot see two of OUR OWN
   measurements colliding -- and that collision moves the numbers just as much
@@ -133,6 +141,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `archive/` with a note saying so.
 
 ### Fixed
+- **Five benchmark runners could not run at all.** The commit that made the
+  runners that spawn their own children take the measurement lock added two
+  lines to five *embedded child scripts*: `sys.path.insert(0,
+  os.path.dirname(os.path.abspath(__file__)))` and `import bench_core`. The
+  children use `os` and none of them import it, and none of them need
+  `bench_core` either, so every one of them died with a `NameError` on its
+  first line of work -- and the parent had the same mistake, so the parent
+  died on `bench_core.measurement_lock`. The scale scan therefore produced a
+  table of fifteen rows in which our nine rows were `CRASH`, and the
+  quiet-window gate reported the batch as "contaminated", which points at the
+  host instead of at the bug. The two lines are gone from the children, the
+  parent imports the module it uses, and the static check
+  (`benchmarks/ripser/tools/smoke_children.py`) now refuses a child script
+  that uses a name it never binds.
+- **The corpus chain no longer dies with the table it just produced.** The
+  corpus driver is followed by a check, and the chain runs under `set -e`, so
+  a check that returned non-zero took the whole chain down with it -- and the
+  two tables after it were never produced. A step that fails is now recorded
+  in the log and the chain goes on to the next one.
 - **The ripser distance-matrix path no longer takes the sparse route on a dense matrix.** `rips_dm_with_callback_and_interval` switched to the sparse distance matrix whenever `threshold < max_finite`. Any pipeline that replaces missing (`+inf`) distances with a finite cap — the ASA pipeline caps them at `2*max_finite + 1` — therefore raised `max_finite` to the cap, and every threshold below the cap satisfied the condition, so an ordinary dense matrix was walked down the sparse path. In this implementation the sparse path is the slower one: the walk counters and the barcode are identical on both routes, but the sparse arm took 4.3x as long, because the dense enumerator rejects a capped pair with a single comparison while the sparse enumerator walks adjacency lists. The decision now requires the matrix to actually contain missing pairs. Measured on the 1200x1200 ASA matrix: the capped arm went from 49.419 s to 11.979 s, the other three arms were unchanged.
 
 ### Changed
@@ -145,6 +172,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Maturin builds now enable the `hugepage` cargo feature** on Linux. It marks allocations of 2 MB or more with `MADV_HUGEPAGE`, which is worth 1.24x end to end on the real ASA workload (119.4 s -> 96.0 s, three interleaved passes, bitwise-identical barcode on all 224 regression cells) because the pivot map is a single ~13 GB allocation whose insert cost is dominated by page faults and TLB misses rather than hashing. It is a no-op on non-Linux. Build with `--no-default-features` to opt out.
 
 ### Removed
+- **The paper's artefact layer left the repository.** The work was re-scoped
+  from "write a paper" to "make the engine fast and keep the measurements
+  honest", and the machinery that only served the paper went with it:
+  `benchmarks/ripser/checkers/` (nineteen checkers, most of whose rules
+  enforced a *claim* rather than a correctness property), the table-to-
+  checker map `RESULTS-20261020.md`, the five report renderers
+  (`render_ripser_report.py`, `render_clean_md.py`, `render_final_md.py`,
+  `render_gap_md.py`, `render_characterization_section.py`), the shuffle
+  protocol `ASA_SHUFFLE.md`, and the three result tables that had been
+  committed to the repository (`scale_scan.csv`, `cpu_giotto.csv`,
+  `determinism_check.csv`). The paper's drafts, its report and the notes
+  about them were moved to `paper-parked/` in the experiment record, where
+  they are untouched. The runners, the drivers and the tools stay: they are
+  how the measurements are made. What the checkers did that still has to
+  happen -- the barcode of the arms of a comparison must agree, and a table
+  must be able to show it was measured on a quiet host -- now lives with the
+  runners that produce the table and in `harness/bench_core.py`.
 - **Eleven one-off probes left the benchmark tree.** `benchmarks/ripser/archive/`
   held probes that had answered a question once and guarded nothing since:
   `inf_form_probe.py`, `thresh_probe.py`, `loop_probe.py`, `sparse_paths.py`,
@@ -167,6 +211,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   address changed.
 
 ### Added
+- **`benchmarks/ripser/tools/smoke_children.py`** — a static check of the
+  embedded child scripts: for every runner, it reports the names a child
+  uses but never binds. It needs no numpy, no site directory and no device,
+  so it runs in a second, and it runs *before* a measurement rather than
+  after it. It exists because five runners were broken in exactly that way
+  and the only symptom was a table full of crashes.
+- **The quiet-window gate has one implementation.** It was three copies of
+  the same inline python, one in each driver that asks the question, and the
+  copies had already drifted. It is now `harness/bench_core.py`'s
+  `foreign_summary` and `batch_is_clean`, and the drivers, the fetch script
+  and the corpus chain all call it. The gate also tells a crashed row from a
+  busy row now: a batch whose rows did not finish says so, instead of being
+  reported as "contaminated" and sending the reader looking at the host.
 - **`gpu` cargo feature** — an opt-in GPU apparent-pair pre-pass, off by default and **not in the release build**: `[tool.maturin]` enables only `parallel`, `hugepage` and `extension-module`, so the published wheels contain no CUDA code at all and the pre-pass runs on the CPU. The GPU pre-pass is a build, not a download: `maturin develop --release --features parallel,hugepage,extension-module,gpu` (keep `extension-module` — it is what makes PyO3 produce a cdylib for Python). The build needs no CUDA toolkit: `build.rs` compiles `kernel/ripser_kernels.cu` with `nvcc` and embeds the cubin when a toolkit is present, and the driver JIT-compiles the same file through NVRTC when it is not. A run with no usable device falls back to the CPU pre-pass, and the barcode does not change. Measured on an A100-SXM4-80GB with the same 2.9e8 columns as the ASA matrix: the CPU pre-pass takes 12.0-15.5 s against 0.093 s for the GPU kernel plus 0.095 s for the pinned readback.
 - **A reproducible head-to-head harness against ripser++** in `benchmarks/ripser/`: the runner, the load characterisation over 97 matrices, the standard suite on ripser++'s own datasets, the scale scan, the unified ablation, and a checker for each. Every table is produced by a script and every checker derives its own grid from the table rather than from a constant, so a missing cell is a failure and not a silent hole; each checker also carries negative self-tests that mutate a copy of the table and require the checker to notice. The tables are not committed: the grid-cell corpus behind two of them has an unsettled licence, so only the scripts and the aggregate characterisation are published until it is. `benchmarks/ripser/RESULTS-20261020.md` maps each table to its checker.
 

@@ -76,30 +76,27 @@ load_now() {
 
 batch_is_clean() {
     # The batch's own evidence: the foreign load recorded on every row
-    # while that row was being measured.
-    python3 - "$1" "$MAX_FOREIGN" <<'PY'
-import csv, sys
-path, limit = sys.argv[1], float(sys.argv[2])
-worst, worst_la, missing = 0.0, 0.0, 0
+    # while that row was being measured. The gate lives in bench_core, so
+    # there is ONE implementation of it, and this script cannot drift from
+    # the one the fetch script uses.
+    python3 - "$1" "$MAX_FOREIGN" "$MODULE" <<'PY'
+import sys
+path, limit, module = sys.argv[1], float(sys.argv[2]), sys.argv[3]
+sys.path.insert(0, module)
+import bench_core
 try:
-    with open(path, newline="") as fh:
-        for r in csv.DictReader(fh):
-            raw = (r.get("foreign_cpu") or "").strip()
-            if not raw:
-                missing += 1
-                continue
-            try:
-                worst = max(worst, float(raw))
-                worst_la = max(worst_la, float(r.get("loadavg") or 0.0))
-            except ValueError:
-                missing += 1
+    worst, missing, broken, rows = bench_core.foreign_summary(path)
 except OSError:
     print("no table to check")
     sys.exit(2)
-print("worst foreign load in the batch: mean %.3f cores (worst load average "
-      "%.2f, %d row(s) without a reading)" % (worst, worst_la, missing))
+print("worst foreign load in the batch: mean %.3f cores (%d row(s) without a "
+      "reading, %d broken row(s), %d rows)" % (worst, missing, broken, rows))
+if broken:
+    print("rows whose run did not finish: %d -- this is a BUG, not a busy host"
+          % broken)
 if missing:
     print("rows without a foreign-load reading: %d" % missing)
+if broken or missing:
     sys.exit(1)
 sys.exit(0 if worst <= limit else 1)
 PY
