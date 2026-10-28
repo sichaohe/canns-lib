@@ -161,6 +161,9 @@ def child_scripts(tree):
     return out
 
 
+HARNESS_MODULES = ("bench_core", "foreign_cpu")
+
+
 def check_file(path):
     problems = []
     with open(path, encoding="utf-8") as fh:
@@ -177,6 +180,25 @@ def check_file(path):
             problems.append("%s: the child script does not parse: %s" % (name, exc))
             continue
         problems += undefined_names(child, "%s:%s" % (base, name))
+        # A child must not import the harness's own modules. The child's
+        # sys.path holds the built wheel, not the harness directory, so the
+        # import cannot be resolved and the child dies on its first line.
+        # Three runners carried that line and none of them had produced a
+        # table since it was added.
+        for node in ast.walk(child):
+            if isinstance(node, ast.Import):
+                for alias in node.names:
+                    if alias.name.split(".")[0] in HARNESS_MODULES:
+                        problems.append(
+                            "%s: the child imports %r, which it cannot resolve: "
+                            "the child's sys.path holds the built wheel, not the "
+                            "harness directory" % (name, alias.name))
+            elif isinstance(node, ast.ImportFrom) and node.module:
+                if node.module.split(".")[0] in HARNESS_MODULES:
+                    problems.append(
+                        "%s: the child imports %r, which it cannot resolve: "
+                        "the child's sys.path holds the built wheel, not the "
+                        "harness directory" % (name, node.module))
     return problems
 
 

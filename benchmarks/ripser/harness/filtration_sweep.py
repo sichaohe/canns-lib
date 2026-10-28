@@ -74,7 +74,6 @@ site, thresh, mode = sys.argv[1], float(sys.argv[2]), sys.argv[3]
 sys.path.insert(0, site)
 from canns_lib.ripser import ripser
 
-import bench_core
 d = np.load("/home/sichaohe/ph_work/ph_dm_1200.npy")
 np.fill_diagonal(d, 0.0)
 if mode == "capped":

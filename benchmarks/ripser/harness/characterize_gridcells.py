@@ -58,7 +58,6 @@ site, path, maxdim, coeff = sys.argv[1], sys.argv[2], int(sys.argv[3]), int(sys.
 sys.path.insert(0, site)
 from canns_lib.ripser import ripser
 
-import bench_core
 d = np.load(path)
 np.fill_diagonal(d, 0.0)
 t0 = time.perf_counter()
