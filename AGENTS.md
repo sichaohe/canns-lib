@@ -1,5 +1,13 @@
 # Repository Guidelines
 
+## Current Direction (2026-10-28)
+The work is on the **engine's performance across benchmarks**, not on the
+paper. The paper's drafts are parked in `ph_work/paper-parked/` and the
+paper's artefact layer (the checkers, the table-to-checker map, the report
+renderers) has left this repository; the runners, drivers and tools that
+produce the measurements stay. The grid-cells corpus is our own benchmark
+and the one that matters most. See `CLAUDE.md` for the full note.
+
 ## Project Structure & Module Organization
 The project now builds from a single `Cargo.toml`. All Rust sources live under `src/`:
 - `src/lib.rs` registers the unified `canns_lib` PyModule and exposes the two submodules.

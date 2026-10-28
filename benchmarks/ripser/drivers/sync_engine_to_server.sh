@@ -50,6 +50,7 @@ esac
 FILES="src/ripser/core/algorithm.rs src/ripser/core/assembly.rs \
 src/ripser/core/reduction.rs src/ripser/matrix/dense.rs \
 src/ripser/matrix/sparse.rs src/ripser/matrix/traits.rs \
+src/ripser/gpu.rs src/ripser/gpu_assembly.rs \
 Cargo.toml build.rs"
 
 # An ARRAY, so that every value is exactly one argument.

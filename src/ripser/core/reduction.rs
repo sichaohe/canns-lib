@@ -1366,7 +1366,15 @@ where
         let mut stat_gpu_s = 0.0f64;
         let mut stat_densify = 0.0f64;
         let mut gpu_err = crate::ripser::gpu::last_error();
-        if apparent_enabled && columns_to_reduce.len() >= crate::ripser::gpu::GPU_MIN_COLUMNS {
+        // THE DEVICE HAS TO BE WORTH IT. The GPU pre-pass is only taken when
+        // the work repays the device initialisation: the CUDA context costs
+        // ~0.245 s per process and the pre-pass saves ~60 ns per column, so
+        // a 500K-column instance saves 40 ms and pays 245 ms. The context is
+        // paid once, so the count is over the process's calls.
+        if apparent_enabled
+            && columns_to_reduce.len() >= crate::ripser::gpu::GPU_MIN_COLUMNS
+            && crate::ripser::gpu::worth_the_device(columns_to_reduce.len())
+        {
             let gpu_t0 = std::time::Instant::now();
             // `densify` unpacks the packed lower triangle into a dense n*n
             // matrix. It is INSIDE `gpu_pre_s` but OUTSIDE the GPUPHASE

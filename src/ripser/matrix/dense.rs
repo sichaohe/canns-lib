@@ -334,8 +334,25 @@ where
         // the reads miss. The fix that DOES scale with the matrix size is not
         // a better prefetch but FEWER READS -- see the early exit below.
         let mut cofacet_diameter = self.simplex.get_diameter();
-        for &w in &self.vertices[..self.num_vertices] {
-            let d = self.dist.get(self.v as usize, w as usize);
+        //
+        // THE LOOP'S STATE IS HOISTED OUT OF IT. `self.dist.get(...)` is a
+        // call through a shared reference, and the compiler cannot prove
+        // that it does not write through `self`, so every field the loop
+        // reads is reloaded from memory on every iteration -- and the loop
+        // body then carries a chain of load, max, compare, branch, where the
+        // branch waits for the max, which waits for the load. On a matrix
+        // that fits in cache that chain is the bottleneck: the early exit
+        // was measured 23% SLOWER on the 1,200-vertex scale-scan instance
+        // (5.76 MB, cache-resident) while being 1.9x faster on o3_4096
+        // (33.5 MB, every read a miss). A local cannot be aliased, so the
+        // values are copied out once and the compiler keeps them in
+        // registers.
+        let reject_at = self.reject_at;
+        let early_exit = self.early_exit;
+        let v = self.v as usize;
+        let vertices = &self.vertices[..self.num_vertices];
+        for &w in vertices {
+            let d = self.dist.get(v, w as usize);
             cofacet_diameter = cofacet_diameter.max(d);
             // EARLY EXIT.
             //
@@ -351,7 +368,19 @@ where
             // for every one of the other 98.7% -- each a scattered miss into
             // a 33.5 MB matrix.
             //
-            if self.early_exit && cofacet_diameter >= self.reject_at {
+            // THE COMPARISON IS ON THE DISTANCE, NOT ON THE RUNNING MAXIMUM.
+            // The two are the same test: the running maximum can only reach
+            // `reject_at` through a READ, because the simplex's own diameter
+            // is <= the threshold and `reject_at` is the next float above it
+            // (or infinity, which no finite simplex diameter reaches). So
+            // `d >= reject_at` fires exactly when the running maximum would
+            // have -- and it is ONE LINK SHORTER on the critical path: the
+            // branch waits for the load, not for the load and the max. The
+            // max is still computed, because the value returned is the
+            // partial maximum and every caller filters on the threshold
+            // before it uses the diameter.
+            //
+            if early_exit && d >= reject_at {
                 // ONE comparison, covering both rejections: a distance above
                 // a finite threshold, and an infinite distance under an
                 // infinite threshold. The diameter returned in that case is
