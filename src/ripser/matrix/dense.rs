@@ -336,28 +336,21 @@ where
     binomial_coeff: &'a BinomialCoeffTable,
     /// The value a distance has to reach for the cofacet to be rejected.
     ///
-    /// ONE comparison per read, for both kinds of threshold:
-    ///
-    /// * a **finite** threshold `T`: the cofacet is rejected when a distance
-    ///   exceeds `T`, and `d >= next_up(T)` is exactly `d > T` for every
-    ///   finite `d` -- there is no float between `T` and `next_up(T)`. An
-    ///   infinite distance is above `T` as well, so the same comparison
-    ///   covers it.
-    /// * an **infinite** threshold: nothing exceeds infinity, so the only way
-    ///   a cofacet can be rejected is an infinite distance, and
-    ///   `d >= INFINITY` is exactly `d == INFINITY`.
-    ///
-    /// The second case is why the rejection test cannot simply be `d > T`:
-    /// with an infinite threshold that test is never true, so it would be pure
-    /// overhead on every single read -- and the corpus runs at threshold =
-    /// infinity, where the reads are cheap because the matrix is
-    /// cache-resident. Measured on the 1,200-vertex ASA matrix, the
-    /// two-comparison form made the run 7% SLOWER.
+    /// ONE comparison per read, for both kinds of threshold. A finite
+    /// threshold T rejects on `d > T`, and `d >= next_up(T)` is exactly that
+    /// for every finite d, with an infinite distance covered by the same
+    /// comparison. An infinite threshold rejects nothing but an infinite
+    /// distance, and `d >= INFINITY` is exactly `d == INFINITY`. That is why
+    /// the test cannot simply be `d > T`: with an infinite threshold it
+    /// would never be true, so it would be pure overhead on every read, and
+    /// the corpus runs at threshold = infinity with cheap cache-resident
+    /// reads. Measured on the 1,200-vertex ASA matrix, the two-comparison
+    /// form made the run 7% slower.
     reject_at: ValueT,
     /// Whether the early exit is enabled.
     ///
     /// The ablation arm turns it off, and it has to restore the OLD
-    /// behaviour EXACTLY: a partly-on early exit is not an ablation, it is
+    /// behaviour exactly: a partly-on early exit is not an ablation, it is
     /// a third thing that no table describes.
     early_exit: bool,
 }
@@ -384,44 +377,20 @@ where
         // Calculate cofacet diameter efficiently:
         // The diameter is max(original simplex diameter, max distance from new vertex to existing vertices)
         //
-        // A row-view variant of this loop (borrowing row `v` once instead of
-        // re-reading `row_offsets[v]` per element) was tried and measured
-        // NEUTRAL: +0.04% at n=300, +1.6% at n=500. The compiler already
-        // hoists it -- `row_offsets` is 9.6 KB and L1-resident -- so the loop
-        // is not bound by that load. Not worth the extra trait surface.
-        //
-        // A SOFTWARE PREFETCH of the next few rows (this loop walks `v`
-        // downward, so the upcoming rows are known) was also tried and came out
-        // NEUTRAL: two interleaved passes disagreed in sign (+4.1%, -1.5%)
-        // with a pre-pass difference of 1.3%, inside run-to-run noise. Do not
-        // retry. Two reasons it cannot work here: `has_next()` depends only on
-        // `v` and the binomial table, never on the distances just loaded, so
-        // the out-of-order engine already overlaps one cofacet's misses with
-        // the next; and prefetching 3 rows x 3 columns to serve 3 real loads is
-        // a 3x instruction amplification that offsets any residual gain.
-        // Latency in this loop is already covered by speculation.
-        //
-        // ⚠ BOTH of those experiments were run at n = 300..500, where the
-        // whole distance matrix is a few hundred KB and every load is a
-        // cache HIT. They therefore say nothing about the regime this loop
-        // actually runs in for a real dataset: at o3_4096 the matrix is
-        // 4096 points = 8.39M f32 = 33.5 MB, the rows are 16 KB apart, and
-        // the reads miss. The fix that DOES scale with the matrix size is not
-        // a better prefetch but FEWER READS -- see the early exit below.
+        // Two variants of this loop were measured and both came out NEUTRAL,
+        // so do not retry them. A row view that reads row_offsets[v] once
+        // instead of per element: +0.04% at n=300, +1.6% at n=500, because the
+        // compiler already hoists that load. A software prefetch of the next
+        // rows: two interleaved passes disagreed in sign (+4.1%, -1.5%),
+        // inside the run-to-run noise. Both were measured at n = 300..500,
+        // where the whole matrix is a few hundred KB and every load is a cache
+        // hit, so they say nothing about a real dataset: at o3_4096 the
+        // matrix is 33.5 MB and the reads miss. What scales with the matrix
+        // size is fewer reads, not a better prefetch.
         let mut cofacet_diameter = self.simplex.get_diameter();
-        //
-        // THE LOOP'S STATE IS HOISTED OUT OF IT. `self.dist.get(...)` is a
-        // call through a shared reference, and the compiler cannot prove
-        // that it does not write through `self`, so every field the loop
-        // reads is reloaded from memory on every iteration -- and the loop
-        // body then carries a chain of load, max, compare, branch, where the
-        // branch waits for the max, which waits for the load. On a matrix
-        // that fits in cache that chain is the bottleneck: the early exit
-        // was measured 23% SLOWER on the 1,200-vertex scale-scan instance
-        // (5.76 MB, cache-resident) while being 1.9x faster on o3_4096
-        // (33.5 MB, every read a miss). A local cannot be aliased, so the
-        // values are copied out once and the compiler keeps them in
-        // registers.
+        // The loop's state is hoisted out of it: a call through the matrix may
+        // write through `self`, so the compiler reloads these fields on every
+        // iteration. A local cannot be aliased.
         let reject_at = self.reject_at;
         let early_exit = self.early_exit;
         let v = self.v as usize;
@@ -429,38 +398,25 @@ where
         for &w in vertices {
             let d = self.dist.get(v, w as usize);
             cofacet_diameter = cofacet_diameter.max(d);
-            // EARLY EXIT.
+            // EARLY EXIT. Every caller keeps a cofacet only when its diameter
+            // is <= the threshold, and the true diameter is >= the running
+            // maximum, so once the running maximum is above the threshold the
+            // cofacet is rejected either way and the remaining distances
+            // cannot change that. At o3_4096 (threshold 1.4) that is 98.7% of
+            // the candidates, and each skipped read is a scattered miss into a
+            // 33.5 MB matrix.
             //
-            // Every caller of this enumerator keeps a cofacet only when its
-            // diameter is <= the threshold, and the true diameter is >= the
-            // running maximum. So once the running maximum is already above
-            // the threshold, the cofacet is rejected either way, and the
-            // remaining distances cannot change that verdict.
-            //
-            // This is not a rare case. At o3_4096 (4096 points, threshold
-            // 1.4) only 1.3% of the enumerated cofacet candidates are under
-            // the threshold, and the old code paid all dim+1 distance reads
-            // for every one of the other 98.7% -- each a scattered miss into
-            // a 33.5 MB matrix.
-            //
-            // THE COMPARISON IS ON THE DISTANCE, NOT ON THE RUNNING MAXIMUM.
-            // The two are the same test: the running maximum can only reach
-            // `reject_at` through a READ, because the simplex's own diameter
-            // is <= the threshold and `reject_at` is the next float above it
-            // (or infinity, which no finite simplex diameter reaches). So
-            // `d >= reject_at` fires exactly when the running maximum would
-            // have -- and it is ONE LINK SHORTER on the critical path: the
-            // branch waits for the load, not for the load and the max. The
-            // max is still computed, because the value returned is the
-            // partial maximum and every caller filters on the threshold
+            // The test is on the distance, not on the running maximum: the
+            // running maximum can only reach `reject_at` through a read,
+            // because the simplex's own diameter is <= the threshold. So one
+            // comparison instead of two, and one link shorter on the critical
+            // path. The max is still computed, because the value returned is
+            // a partial maximum and every caller filters on the threshold
             // before it uses the diameter.
-            //
             if early_exit && d >= reject_at {
-                // ONE comparison, covering both rejections: a distance above
-                // a finite threshold, and an infinite distance under an
-                // infinite threshold. The diameter returned in that case is
-                // a partial maximum, but it is already above the threshold,
-                // so no caller can observe it: a caller that kept it would
+                // The diameter returned here is a partial maximum, but it is
+                // already above the threshold, so no caller can observe it: a
+                // caller that kept it would keep the exact diameter too.
                 // keep the exact diameter too.
                 break;
             }

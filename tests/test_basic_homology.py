@@ -126,4 +126,4 @@ if __name__ == "__main__":
     test_basic.test_simple_triangle()
     test_basic.test_maxdim_parameter()
     test_basic.test_coefficient_field_2()
-    print("✅ Basic homology tests passed!")
+    print("OK Basic homology tests passed!")

@@ -781,7 +781,7 @@ where
                     top = mid;
                 }
             }
-            out[pos - 1] = lo; // fill from the back → ascending order
+            out[pos - 1] = lo; // fill from the back, so the result is ascending
             pos -= 1;
             idx -= self.binomial_coeff.get(lo, k);
             hi = lo;
@@ -1366,11 +1366,11 @@ where
         let mut stat_gpu_s = 0.0f64;
         let mut stat_densify = 0.0f64;
         let mut gpu_err = crate::ripser::gpu::last_error();
-        // THE DEVICE HAS TO BE WORTH IT. The GPU pre-pass is only taken when
-        // the work repays the device initialisation: the CUDA context costs
-        // ~0.245 s per process and the pre-pass saves ~60 ns per column, so
-        // a 500K-column instance saves 40 ms and pays 245 ms. The context is
-        // paid once, so the count is over the process's calls.
+        // The GPU pre-pass is only taken when the work repays the device: the
+        // CUDA context costs about 0.245 s per process and the pre-pass saves
+        // about 60 ns per column, so a 500K-column instance saves 40 ms and
+        // pays 245 ms. The context is paid once, so the count is over the
+        // process's calls.
         if apparent_enabled
             && columns_to_reduce.len() >= crate::ripser::gpu::GPU_MIN_COLUMNS
             && crate::ripser::gpu::worth_the_device(columns_to_reduce.len())
@@ -1867,7 +1867,7 @@ where
                             births_and_deaths.push(death);
                         }
                     }
-                    // ⚠️ THE PIVOT INSERT IS NOT OPTIONAL. When the NEXT
+                    // NOTE: THE PIVOT INSERT IS NOT OPTIONAL. When the NEXT
                     // dimension's assembly needs the pivot map, the sharded
                     // table is not built (`pivot_map_needed_for_assembly`),
                     // so `_apparent_index` is None and the apparent pivots

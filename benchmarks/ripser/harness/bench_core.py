@@ -277,26 +277,22 @@ def foreign_summary(path):
     THE ONE PLACE THE GATE IS COMPUTED. The drivers ask the same question of
     a table -- "was every row measured on a quiet host?" -- and they used to
     answer it with three copies of the same inline python, which is how copies
-    drift. `worst` is the largest MEAN foreign load over a row, `missing` is
+    drift. `worst` is the largest mean foreign load over a row, `missing` is
     the number of rows with no reading at all, `broken` is the number of rows
     whose run did not finish, and `timed_out` is the number of rows that hit
     the time limit.
 
-    A row with no reading is not a quiet row. It is a row whose host state is
-    unknown, and the honest answer to "was this measured on a quiet host" is
-    "we do not know" -- which is a failure, not a footnote.
+    A row with no reading is not a quiet row: its host state is unknown, and
+    "we do not know" is a failure, not a footnote.
 
-    `broken` and `timed_out` are counted SEPARATELY, and a timeout is NOT a
+    `broken` and `timed_out` are counted separately, and a timeout is NOT a
     broken row. A timeout is a legal result: the runners record it as such
     (`TIMEOUT` in the `error` column, `TIMEOUT` in the `verdict` column), and
-    a table that says "this run did not finish inside 600 s" is a table that
-    says the truth. What is not legal is a row that looks like a fast run
-    because the child died -- and a gate that reports both as "contaminated"
-    sends the reader to the wrong place: a scale scan whose nine rows crashed
-    because the child script had a NameError was reported as "contaminated",
-    which points at the host instead of at the bug, and a scale scan whose
-    ripser++ arm ran out of time on a 16 GB device was thrown away for the
-    same reason, with the good rows in it.
+    a table that says "this did not finish inside 600 s" tells the truth. A
+    row whose child died is not a measurement: it looks like a fast run and it
+    is not. A gate that calls both "contaminated" sends the reader to the
+    wrong place: a scale scan whose nine rows crashed on a NameError in the
+    child script was reported as contaminated, which points at the host.
     """
     worst = 0.0
     missing = 0

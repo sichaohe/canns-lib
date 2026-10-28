@@ -33,7 +33,7 @@ fn main() {
     // we want if a .cuh ever joins it.
     println!("cargo:rerun-if-changed=kernel");
 
-    // ⚠ Both knobs participate in the rebuild decision. Without these lines an
+    // NOTE: Both knobs participate in the rebuild decision. Without these lines an
     // arch change (or a skip flag) leaves the previous image in OUT_DIR and the
     // log prints the architecture that was *intended*, not the one on disk.
     println!("cargo:rerun-if-env-changed=NVCC_ARCH");

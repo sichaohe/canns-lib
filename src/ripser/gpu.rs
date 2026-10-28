@@ -61,36 +61,25 @@ impl ApparentResult {
 /// full result array up front (16 B/column) where the CPU path streams it.
 pub const GPU_MIN_COLUMNS: usize = 1 << 16;
 
-/// The device initialisation is paid ONCE per process, and it is not small:
-/// the CUDA context and the module load cost ~0.245 s on the benchmark host.
-/// The GPU pre-pass saves about 60 ns per column -- the CPU pre-pass against
-/// the kernel, measured on the grid-cell corpus, where the GPU arm is 40 ms
-/// faster on a 500K-column instance.
-///
-/// So the device only pays for itself at about four million columns, and
-/// below that the GPU is a net LOSS, and the loss is per PROCESS: a
+/// The device initialisation is paid once per process and costs about
+/// 0.245 s on the benchmark host, while the GPU pre-pass saves about 60 ns
+/// per column, so the device only pays for itself at about four million
+/// columns. Below that the GPU is a net loss, and the loss is per process: a
 /// 500K-column instance saves 40 ms of pre-pass and pays 245 ms of context.
 /// That is why the grid-cell corpus, whose matrices run at dimension 1, was
-/// 25% SLOWER on the GPU build than on the CPU build -- the device was
-/// bought for a saving it could not repay.
+/// 25% slower on the GPU build than on the CPU build.
 pub const GPU_INIT_BREAK_EVEN_COLUMNS: usize = 1 << 22;
 
-/// The columns this process has offered the GPU pre-pass.
-///
-/// The device initialisation is a per-PROCESS cost, so the saving has to be
-/// counted the same way: a process that makes many calls on small instances
-/// earns the device, and one that makes a single call on a small instance
-/// does not pay for it.
+/// The columns this process has offered the GPU pre-pass. The device
+/// initialisation is a per-process cost, so the saving is counted the same
+/// way: a process that makes many calls on small instances earns the device,
+/// and one that makes a single call on a small instance does not pay for it.
 static GPU_COLUMNS_SEEN: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
 
 /// Whether the GPU pre-pass is worth the device, for a call with this many
-/// columns.
-///
-/// The context is paid once. If it is already paid, the only question left
-/// is whether the transfer pays for itself -- the old threshold's question.
-/// If it is not, the process has to have earned it: the columns it has
-/// offered so far, plus these, have to be worth the ~0.245 s the device
-/// costs.
+/// columns. If the context is already paid, only the transfer is at stake,
+/// which is the old threshold's question. If it is not, the process has to
+/// have earned it.
 pub fn worth_the_device(columns: usize) -> bool {
     use std::sync::atomic::Ordering;
     let seen = GPU_COLUMNS_SEEN.fetch_add(columns as u64, Ordering::Relaxed) + columns as u64;
@@ -296,24 +285,22 @@ mod imp {
         SLOT.get_or_init(|| std::sync::Mutex::new(None))
     }
 
-    /// Whether the device is usable -- WITHOUT CREATING IT.
+    /// Whether the device is usable, WITHOUT CREATING IT.
     ///
-    /// "Is there a GPU here" is a question, and the answer must not be the
-    /// thing that pays for the GPU: the CUDA context costs ~0.25 s on this
-    /// host. The device is usable when it has been initialised and worked;
-    /// before that, the honest answer is "not tried yet".
+    /// Asking whether there is a GPU must not be the thing that pays for the
+    /// GPU: the CUDA context costs about 0.25 s on this host. Before the
+    /// device has been initialised the honest answer is "not tried yet".
     pub fn available() -> bool {
         matches!(DEV.get(), Some(Ok(_)))
     }
 
     /// Why the GPU is unusable, for the STATS line. Empty when it works.
     ///
-    /// THE RECORDED ERROR, NOT A PROBE. This used to call `device()`, which
-    /// created the CUDA context, and the reduction called it on every call to
-    /// fill in one statistics field. So every call of a GPU build paid
-    /// ~0.25 s for a context it might never use -- including the calls whose
-    /// work was far too small to be worth the device at all. Now the error is
-    /// recorded when the device is initialised, and asking for it is free.
+    /// The RECORDED error, not a probe. This used to call `device()`, which
+    /// created the context, and the reduction called it on every call to fill
+    /// in one statistics field, so every call of a GPU build paid about
+    /// 0.25 s for a context it might never use. Now the error is recorded
+    /// when the device is initialised, and asking for it is free.
     pub fn last_error() -> String {
         init_error()
             .lock()

@@ -138,10 +138,10 @@ def main():
     
     if failed == 0:
         print("🎉 All quality tests passed!")
-        print("✅ Implementation includes key improvements from todo.md")
+        print("OK Implementation includes key improvements from todo.md")
         return 0
     else:
-        print("❌ Some quality tests failed")
+        print("FAILED Some quality tests failed")
         return 1
 
 if __name__ == "__main__":

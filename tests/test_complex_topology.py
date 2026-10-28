@@ -182,7 +182,7 @@ class TestComplexTopology:
         assert len(canns_result['dgms'][1]) >= 1, "Should have at least 1 H1 feature" 
         
         # For a perfect torus, we expect H1=2, but sampling might affect this
-        print("✅ Torus test completed")
+        print("OK Torus test completed")
 
     @pytest.mark.skipif(not ORIGINAL_AVAILABLE, reason="Original ripser not available")
     def test_sphere_topology(self):
@@ -203,7 +203,7 @@ class TestComplexTopology:
         assert len(canns_result['dgms'][1]) == len(orig_result['dgms'][1]), "H1 features should match"
         assert len(canns_result['dgms'][2]) == len(orig_result['dgms'][2]), "H2 features should match"
         
-        print("✅ Sphere test passed")
+        print("OK Sphere test passed")
 
     @pytest.mark.skipif(not ORIGINAL_AVAILABLE, reason="Original ripser not available")
     def test_double_circle_topology(self):
@@ -224,7 +224,7 @@ class TestComplexTopology:
         assert len(canns_result['dgms'][1]) == len(orig_result['dgms'][1]), "H1 features should match"
         assert len(canns_result['dgms'][2]) == len(orig_result['dgms'][2]), "H2 features should match"
         
-        print("✅ Double circle test passed")
+        print("OK Double circle test passed")
 
     @pytest.mark.skipif(not ORIGINAL_AVAILABLE, reason="Original ripser not available")
     def test_linked_circles_topology(self):
@@ -245,7 +245,7 @@ class TestComplexTopology:
         assert len(canns_result['dgms'][1]) == len(orig_result['dgms'][1]), "H1 features should match"
         assert len(canns_result['dgms'][2]) == len(orig_result['dgms'][2]), "H2 features should match"
         
-        print("✅ Linked circles test passed")
+        print("OK Linked circles test passed")
 
     def test_cube_boundary_topology(self):
         """Test cube boundary: H0=1, H1=0, H2=1 (like sphere)"""
@@ -269,7 +269,7 @@ class TestComplexTopology:
             if len(result['dgms'][dim]) > 5:
                 print(f"  ... and {len(result['dgms'][dim]) - 5} more")
         
-        print("✅ Cube boundary test completed")
+        print("OK Cube boundary test completed")
 
     def test_performance_large_dataset(self):
         """Test performance with larger datasets"""
@@ -291,7 +291,7 @@ class TestComplexTopology:
         # Should complete in reasonable time without infinite loops
         assert end_time - start_time < 60, "Should complete within 60 seconds"
         
-        print("✅ Performance test passed")
+        print("OK Performance test passed")
 
     def test_noise_robustness(self):
         """Test robustness to noise"""
@@ -315,7 +315,7 @@ class TestComplexTopology:
             self.create_sphere_points(n_points=40, noise=n), maxdim=2, thresh=1.5
         ) for n in noise_levels]), "Should maintain basic connectivity"
         
-        print("✅ Noise robustness test completed")
+        print("OK Noise robustness test completed")
 
     def test_sparse_input_support(self):
         """Test sparse matrix input formats"""
@@ -354,7 +354,7 @@ class TestComplexTopology:
         assert abs(len(result_coo['dgms'][0]) - len(result_dense['dgms'][0])) <= 1, "COO H0 should match dense"
         assert abs(len(result_csr['dgms'][0]) - len(result_dense['dgms'][0])) <= 1, "CSR H0 should match dense"
         
-        print("✅ Sparse input support test passed")
+        print("OK Sparse input support test passed")
 
     def test_cocycle_output(self):
         """Test cocycle computation and output"""
@@ -395,7 +395,7 @@ class TestComplexTopology:
         
         print(f"Torus cocycles: {[len(dim_cocycles) for dim_cocycles in torus_result['cocycles']]}")
         
-        print("✅ Cocycle output test passed")
+        print("OK Cocycle output test passed")
 
     def test_greedy_algorithms_status(self):
         """Test greedy algorithm support and alternatives"""
@@ -414,11 +414,11 @@ class TestComplexTopology:
             result_perm = canns_ripser_ripser(points, maxdim=1, thresh=0.5, n_perm=50)
             
             if len(w) > 0:
-                print(f"  ⚠️  n_perm not implemented: {w[0].message}")
+                print(f"  NOTE:  n_perm not implemented: {w[0].message}")
                 print(f"  📊 Full computation: H0={len(result_full['dgms'][0])}, H1={len(result_full['dgms'][1])}")
                 print(f"     With n_perm=50:   H0={len(result_perm['dgms'][0])}, H1={len(result_perm['dgms'][1])}")
             else:
-                print(f"  ✅ n_perm implemented")
+                print(f"  OK n_perm implemented")
         
         # Test manual subsampling as alternative
         print("Testing manual subsampling alternatives:")
@@ -447,7 +447,7 @@ class TestComplexTopology:
         elif approx_time == 0:
             print(f"    💡 Computation too fast to measure speedup (< 0.001s)")
         
-        print("✅ Greedy algorithms status test completed")
+        print("OK Greedy algorithms status test completed")
 
     def test_performance_comparison_sparse_vs_dense(self):
         """Compare performance between sparse and dense computations"""
@@ -493,7 +493,7 @@ class TestComplexTopology:
         if time2 > 0 and time3 > 0 and time2 > time3 and nnz < n_points**2 * 0.5:
             print(f"    💡 Sparse speedup: {time2/time3:.2f}x (when density < 50%)")
         
-        print("✅ Performance comparison test passed")
+        print("OK Performance comparison test passed")
 
     def test_advanced_cocycle_features(self):
         """Test advanced cocycle features with complex topologies"""
@@ -534,7 +534,7 @@ class TestComplexTopology:
                     if hasattr(sample_cocycle, 'dtype'):
                         print(f"    Dtype: {sample_cocycle.dtype}")
         
-        print("✅ Advanced cocycle features test completed")
+        print("OK Advanced cocycle features test completed")
 
 
 if __name__ == "__main__":

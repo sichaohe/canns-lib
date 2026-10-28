@@ -110,4 +110,4 @@ if __name__ == "__main__":
     test_h2 = TestH2Homology()
     test_h2.test_tetrahedron_h2()
     test_h2.test_planar_points_h2()
-    print("✅ H2 homology tests passed!")
+    print("OK H2 homology tests passed!")

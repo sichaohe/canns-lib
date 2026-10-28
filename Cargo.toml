@@ -23,12 +23,12 @@ pyo3 = { version = "0.28.2" }
 numpy = "0.28.0"
 # Pin to 0.17 to match numpy 0.28's transitive ndarray requirement. If pinned
 # to 0.16, fresh `cargo build` resolves TWO ndarray versions (0.16.1 from our
-# crate + 0.17.2 from numpy 0.28) — the two ArrayBase types are distinct, so
+# crate + 0.17.2 from numpy 0.28) - the two ArrayBase types are distinct, so
 # numpy's `impl<A, D> IntoPyArray for ArrayBase<OwnedRepr<A>, D>` is invisible
 # to our `array.into_pyarray(py)` call and `cargo build --lib` fails with
 # `no method named 'into_pyarray'`. With 0.17 pinned, both crates share the
 # same ndarray and the impl resolves correctly. (The trade-off: `cargo build`
-# without `extension-module` still needs Python.h on PATH for pyo3 to link —
+# without `extension-module` still needs Python.h on PATH for pyo3 to link -
 # this is a separate issue handled by CI setting up Python before clippy.)
 ndarray = "0.17"
 rayon = { version = "1.8", optional = true }
@@ -163,7 +163,7 @@ hugepage = []
 # CPU 12.0-15.5 s -> GPU kernel 0.093 s, plus 0.095 s pinned readback.
 gpu = ["dep:cudarc", "dep:libloading"]
 # Opt-in: enable mimalloc as the global allocator. Off by default because
-# mimalloc 0.1.43 SIGSEGVs on macOS Darwin 26 — see NOTE on the mimalloc dep.
+# mimalloc 0.1.43 SIGSEGVs on macOS Darwin 26 - see NOTE on the mimalloc dep.
 mimalloc = ["dep:mimalloc"]
 # Required when building the cdylib for Python (i.e. via `maturin develop` or
 # `cargo build --features extension-module`). Must NOT be set for plain

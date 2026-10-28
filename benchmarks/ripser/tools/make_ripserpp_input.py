@@ -35,7 +35,7 @@ The barcode is therefore the barcode of the FINITE part of the matrix --
 the same filtration our own side computes when it is given the matrix
 with the inf entries left alone.
 
-⚠ THRESHOLD IS T, NOT M. Passing `--threshold M` (the cap) instead
+NOTE: THRESHOLD IS T, NOT M. Passing `--threshold M` (the cap) instead
 admits the capped pairs as real edges and grows the dim-2 column count
 from 100,897,898 to 286,562,199 -- a different, much larger filtration.
 The two sides must be told the same thing.

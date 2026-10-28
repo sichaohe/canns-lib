@@ -84,10 +84,10 @@ if __name__ == "__main__":
         try:
             print(f"\n• Running {test.__name__}...")
             test()
-            print(f"  ✅ {test.__name__} passed")
+            print(f"  OK {test.__name__} passed")
             passed += 1
         except Exception as e:
-            print(f"  ❌ {test.__name__} failed: {e}")
+            print(f"  FAILED {test.__name__} failed: {e}")
             import traceback
             traceback.print_exc()
             failed += 1
@@ -97,9 +97,9 @@ if __name__ == "__main__":
     
     if failed == 0:
         print("🎉 All error handling tests passed!")
-        print("✅ Error handling properly converts Rust errors to Python exceptions")
-        print("✅ No more 'Fatal Python error: Aborted' crashes")
+        print("OK Error handling properly converts Rust errors to Python exceptions")
+        print("OK No more 'Fatal Python error: Aborted' crashes")
         sys.exit(0)
     else:
-        print("❌ Some error handling tests failed")
+        print("FAILED Some error handling tests failed")
         sys.exit(1)

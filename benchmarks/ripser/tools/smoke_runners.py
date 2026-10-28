@@ -1,29 +1,24 @@
 #!/usr/bin/env python3
 """Check the runners in `harness/` before they are asked to measure anything.
 
-WHAT THIS IS FOR. A runner in `harness/` does not measure anything itself: it
-writes a small python program into a string, hands it to a child process, and
-reads the child's output. There are TWO programs in a runner and BOTH can
-fail on a name that is never bound:
+WHAT THIS IS FOR. A runner does not measure anything itself: it writes a
+small python program into a string, hands it to a child process, and reads
+the child's output. There are TWO programs in a runner and BOTH can fail on
+a name that is never bound:
 
 * the CHILD script, in the string;
 * the RUNNER MODULE itself.
 
-A name that is used and never bound is a `NameError` at RUN time -- inside a
+A name that is used and never bound is a NameError at RUN time, inside a
 measurement, on the host, after the quiet window has been waited for. It has
-happened in both places:
-
-* five runners had `sys.path.insert(0, os.path.dirname(...))` and
-  `import bench_core` added to their CHILD scripts, where the children use
-  `os` without importing it and do not need `bench_core` at all -- so every
-  child died with a NameError, and the scale scan produced a table of
-  fifteen rows in which our nine were CRASH;
-* the parents had the same mistake, so they died on
-  `bench_core.measurement_lock` and `bench_core.with_foreign`.
-
-The second one is what this file now checks as well: it did not, and a
-runner that has been broken since a merge can sit in the tree for weeks
-without anybody noticing, because its table simply stops appearing.
+happened in both places: five runners had two lines added to their CHILD
+scripts, where the children use `os` without importing it, so every child
+died with a NameError and the scale scan produced a table of fifteen rows in
+which our nine were CRASH; and the parents had the same mistake and died on
+`bench_core.measurement_lock` and `bench_core.with_foreign`. The second kind
+is what this file now checks as well. A runner that has been broken since a
+merge can sit in the tree for weeks without anybody noticing, because its
+table simply stops appearing.
 
 The check is static: no numpy, no site directory, no device, a second to
 run, and it runs BEFORE a measurement rather than after it.

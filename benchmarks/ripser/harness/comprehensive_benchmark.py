@@ -36,7 +36,7 @@ try:
     from ripser import ripser as original_ripser
     ORIGINAL_RIPSER_AVAILABLE = True
 except Exception:
-    print("⚠️ Original ripser.py not found: will only run canns-lib.")
+    print("NOTE: Original ripser.py not found: will only run canns-lib.")
     ORIGINAL_RIPSER_AVAILABLE = False
 
 try:
@@ -62,7 +62,7 @@ try:
     from scipy.spatial.distance import pdist, squareform
     HAS_SCIPY = True
 except Exception:
-    print("⚠️ scipy not found: sparse matrix benchmarks will be disabled.")
+    print("NOTE: scipy not found: sparse matrix benchmarks will be disabled.")
     HAS_SCIPY = False
 
 try:
@@ -983,7 +983,7 @@ class BenchmarkSuite:
                 bncol = f"acc_h{dim}_bn_distance_median"
                 acc = agg[mcol].mean() if mcol in agg.columns else np.nan
                 bn_med = agg[bncol].median() if bncol in agg.columns else np.nan
-                print(f"  • H{dim}: match≈{acc if np.isfinite(acc) else np.nan:.1%}, bottleneck median≈{bn_med if np.isfinite(bn_med) else np.nan:.4f}")
+                print(f"  • H{dim}: match~{acc if np.isfinite(acc) else np.nan:.1%}, bottleneck median~{bn_med if np.isfinite(bn_med) else np.nan:.4f}")
 
             if "speedup_mean" in agg.columns:
                 top = agg.sort_values("speedup_mean", ascending=False).head(3)

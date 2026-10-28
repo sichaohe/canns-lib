@@ -99,7 +99,7 @@ def print_summary(agg: pd.DataFrame):
             mcol = f"acc_h{dim}_match_mean"
             if mcol in agg.columns:
                 acc = agg[mcol].mean()
-                print(f"H{dim} match rate ≈ {acc:.1%}")
+                print(f"H{dim} match rate ~ {acc:.1%}")
 
     if has_orig and "speedup_mean" in agg.columns:
         top = agg.sort_values("speedup_mean", ascending=False).head(5)

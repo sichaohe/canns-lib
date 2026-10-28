@@ -179,7 +179,7 @@ class Agent:
 
     @property
     def position(self) -> _np.ndarray:
-        # Read-only alias — no setter, so external writes can't bypass
+        # Read-only alias - no setter, so external writes can't bypass
         # the boundary projection that ``set_position`` applies.
         return _np.asarray(self._inner.position, dtype=float)
 

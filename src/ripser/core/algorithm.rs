@@ -123,7 +123,7 @@ pub fn rips_dm_with_callback_and_interval(
 
     // Decide whether to use dense or sparse representation.
     //
-    // ⚠ THE MATRIX MUST ACTUALLY HAVE MISSING PAIRS. The original condition
+    // NOTE: THE MATRIX MUST ACTUALLY HAVE MISSING PAIRS. The original condition
     // was only `threshold < max_finite`, and that mis-fires on a FULLY DENSE
     // matrix whose largest value happens to be an artificial cap: the ASA
     // pipeline replaces the ~30% of +inf pairs with M = 2*max_finite + 1, so

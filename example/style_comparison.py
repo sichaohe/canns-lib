@@ -98,7 +98,7 @@ def main() -> None:
     print("\n" + "=" * 70)
     print("  Style Comparison Summary")
     print("=" * 70)
-    print("\n✅ Three predefined styles available:")
+    print("\nOK Three predefined styles available:")
     print("  1. Simulation (default): Soft gray tones, no axes, clean appearance")
     print("  2. Scientific: Traditional axes and ticks, white background")
     print("  3. Publication: High-contrast black/white for academic papers")

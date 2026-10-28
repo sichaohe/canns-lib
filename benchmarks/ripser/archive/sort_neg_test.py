@@ -20,7 +20,7 @@ Each variant is built on the server, installed into its own site directory,
 and run through sort_gate.py. A variant that the gate PASSes is a FAILURE of
 this script, not a success of the gate.
 
-⚠️ THE VARIANTS MUST BE ISOLATED. Before each variant this script restores
+NOTE: THE VARIANTS MUST BE ISOLATED. Before each variant this script restores
 EVERY file it snapshots, not just the one it is about to patch. An earlier
 version restored only the current file, so the previous variant's breakage
 was still in the tree: variants 2 and 3 were variant 1 PLUS the new change,
@@ -126,7 +126,7 @@ def main():
             name = v["name"]
             print(f"\n=== variant {name}: {v['why']} ===", flush=True)
             path = os.path.join(repo, v["file"])
-            # ⚠️ Restore EVERY snapshotted file, not just this variant's. An
+            # NOTE: Restore EVERY snapshotted file, not just this variant's. An
             # earlier version restored only the file it was about to patch,
             # so the PREVIOUS variant's breakage was still in the tree: the
             # second and third variants were the first variant PLUS the new

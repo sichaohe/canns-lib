@@ -125,7 +125,7 @@ class TestComprehensiveAccuracy:
             assert result_orig['num_edges'] == result_canns['num_edges'], \
                 f"num_edges mismatch: {result_orig['num_edges']} vs {result_canns['num_edges']}"
         
-        print(f"✅ {test_name} passed all comparisons")
+        print(f"OK {test_name} passed all comparisons")
     
     # Core H0 Tests (Connected Components)
     def test_h0_triangle(self):
@@ -192,7 +192,7 @@ class TestComprehensiveAccuracy:
             print(f"COO Matrix H{dim}: Dense={len(dense_dgm)}, Sparse={len(sparse_dgm)}")
             compare_persistence_diagrams(dense_dgm, sparse_dgm, dim)
         
-        print("✅ Sparse COO matrix test passed")
+        print("OK Sparse COO matrix test passed")
 
     def test_sparse_csr_matrix(self):
         """Test with sparse CSR matrix input."""
@@ -220,7 +220,7 @@ class TestComprehensiveAccuracy:
             print(f"CSR Matrix H{dim}: Dense={len(dense_dgm)}, Sparse={len(sparse_dgm)}")
             compare_persistence_diagrams(dense_dgm, sparse_dgm, dim)
         
-        print("✅ Sparse CSR matrix test passed")
+        print("OK Sparse CSR matrix test passed")
 
     def test_sparse_csc_matrix(self):
         """Test with sparse CSC matrix input."""
@@ -248,7 +248,7 @@ class TestComprehensiveAccuracy:
             print(f"CSC Matrix H{dim}: Dense={len(dense_dgm)}, Sparse={len(sparse_dgm)}")
             compare_persistence_diagrams(dense_dgm, sparse_dgm, dim)
         
-        print("✅ Sparse CSC matrix test passed")
+        print("OK Sparse CSC matrix test passed")
 
     def test_sparse_matrix_with_original_ripser(self):
         """Test sparse matrix against original ripser with same dense matrix."""
@@ -277,13 +277,13 @@ class TestComprehensiveAccuracy:
             print(f"Sparse vs Original H{dim}: Orig={len(orig_dgm)}, Sparse={len(sparse_dgm)}")
             compare_persistence_diagrams(orig_dgm, sparse_dgm, dim)
         
-        print("✅ Sparse matrix vs original ripser test passed")
+        print("OK Sparse matrix vs original ripser test passed")
 
 
 if __name__ == "__main__":
     """Run basic tests directly if executed as script."""
     print("🧪 === Basic Ripser Accuracy Testing ===")
-    print(f"Original ripser.py available: {'✅ Yes' if ripser_available else '❌ No'}")
+    print(f"Original ripser.py available: {'Yes' if ripser_available else 'No'}")
     
     if ripser_available:
         test_comp = TestComprehensiveAccuracy()
@@ -310,26 +310,26 @@ if __name__ == "__main__":
                 print(f"   Testing {description}...", end=" ")
                 method = getattr(test_comp, method_name)
                 method()
-                print("✅")
+                print("OK")
                 passed_tests += 1
             except Exception as e:
-                print(f"❌ Failed: {e}")
+                print(f"FAILED: {e}")
                 failed_tests.append((description, str(e)))
         
         print(f"\n📊 Comparison Test Results:")
-        print(f"   ✅ Passed: {passed_tests}/{len(test_methods)}")
+        print(f"   OK Passed: {passed_tests}/{len(test_methods)}")
         if failed_tests:
-            print(f"   ❌ Failed: {len(failed_tests)}")
+            print(f"   FAILED: {len(failed_tests)}")
             for desc, error in failed_tests:
                 print(f"      - {desc}: {error}")
         
         if len(failed_tests) == 0:
             print("\n🎉 All comparison tests passed! canns-lib matches original ripser.py exactly!")
         else:
-            print(f"\n⚠️  {len(failed_tests)} tests failed. Please check the implementation.")
+            print(f"\nNOTE:  {len(failed_tests)} tests failed. Please check the implementation.")
             
     else:
-        print("\n2️⃣ ⚠️ Original ripser.py not available - skipping comprehensive comparison tests")
+        print("\n2️⃣ NOTE: Original ripser.py not available - skipping comprehensive comparison tests")
         print("   To run full accuracy tests:")
         print("   1. Ensure original ripser.py is installed: pip install ripser")
         print("   2. Or check that ref/ripser.py-master/ directory exists")

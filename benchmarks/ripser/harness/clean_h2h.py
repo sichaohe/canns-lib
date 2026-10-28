@@ -50,7 +50,7 @@ PP_TXT = "/tmp/asa1200_full.txt"
 RP = "/home/sichaohe/ph_work/ripserpp/ripserplusplus/build3/ripser++"
 PROVENANCE = {}
 THREADS = 0
-# The build under test. ⚠ It MUST be compiled with the `gpu` feature: the GPU
+# The build under test. NOTE: It MUST be compiled with the `gpu` feature: the GPU
 # apparent pre-pass lives behind `#[cfg(feature = "gpu")]`, the feature is in
 # neither `default` nor `[tool.maturin] features`, and a build without it
 # silently falls back to the CPU pre-pass (16 s against 12 s on the same

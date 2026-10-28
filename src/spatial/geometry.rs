@@ -105,7 +105,7 @@ pub(crate) fn distance_squared(point: &[f64], other: &[f64; 2]) -> f64 {
 /// let velocity = [1.0, -1.0];
 /// let wall = [[0.0, 0.0], [1.0, 0.0]];
 /// let reflected = wall_bounce(&velocity, &wall);
-/// // reflected ≈ [1.0, 1.0] (x unchanged, y reversed)
+/// // reflected ~ [1.0, 1.0] (x unchanged, y reversed)
 /// ```
 pub(crate) fn wall_bounce(velocity: &[f64; 2], wall: &[[f64; 2]; 2]) -> [f64; 2] {
     // 1. Calculate wall direction vector
@@ -163,7 +163,7 @@ pub(crate) fn wall_bounce(velocity: &[f64; 2], wall: &[[f64; 2]; 2]) -> [f64; 2]
 /// - Trajectory: P(t) = start + t*(end - start), t ∈ [0,1]
 /// - Wall: Q(s) = wall[0] + s*(wall[1] - wall[0]), s ∈ [0,1]
 /// Solve P(t) = Q(s) to get intersection parameters (t, s)
-/// If 0 ≤ t,s ≤ 1, they intersect
+/// If 0 <= t,s <= 1, they intersect
 pub(crate) fn check_line_wall_collision(
     start: &[f64; 2],
     end: &[f64; 2],
@@ -192,8 +192,8 @@ pub(crate) fn check_line_wall_collision(
 
         // Solve for parameters t and s
         // Using Cramer's rule:
-        // t = (d3 × d2) / denom, where d3 = wall[0] - start, d2 = wall[1] - wall[0]
-        // s = (d3 × d1) / denom, where d1 = end - start
+        // t = (d3 x d2) / denom, where d3 = wall[0] - start, d2 = wall[1] - wall[0]
+        // s = (d3 x d1) / denom, where d1 = end - start
         let t = (dx3 * dy2 - dy3 * dx2) / denom;
         let s = (dx3 * dy1 - dy3 * dx1) / denom;
 

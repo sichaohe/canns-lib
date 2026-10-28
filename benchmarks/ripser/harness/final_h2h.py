@@ -118,7 +118,7 @@ def run_ripserpp(arm, iform, extra_env, timeout):
 def parse_ripserpp_stdout(stdout):
     """ripser++'s own output -> (bars per dim, H1 top-3).
 
-    ⚠️ THE ESSENTIAL CONVENTION MUST MATCH canns-lib's. ripser++ prints an
+    NOTE: THE ESSENTIAL CONVENTION MUST MATCH canns-lib's. ripser++ prints an
     essential bar as `[0, )` -- the death is EMPTY, so a naive
     `float(t[1])` raises and a naive split drops the bar. An earlier harness
     also filtered +inf deaths out of ripser++'s bars but NOT out of

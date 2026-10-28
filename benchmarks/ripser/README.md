@@ -32,11 +32,11 @@ answer it again is neither.
 
 ```
 benchmarks/ripser/
-├── harness/     the runners that produce a table, and the libraries they import
-├── drivers/     the shell helpers: sync, build, watch for a quiet window, fetch
-├── tools/       the things that work on tables rather than produce them
-├── patches/     patches applied to a COPY of ripser++, to instrument it
-└── archive/     the probes that still guard something
+|-- harness/     the runners that produce a table, and the libraries they import
+|-- drivers/     the shell helpers: sync, build, watch for a quiet window, fetch
+|-- tools/       the things that work on tables rather than produce them
+|-- patches/     patches applied to a COPY of ripser++, to instrument it
+`-- archive/     the probes that still guard something
 ```
 
 A runner and the library it imports live in the same directory, so the

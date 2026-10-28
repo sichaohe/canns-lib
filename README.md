@@ -42,10 +42,10 @@ moons, circles). Cross-validated on **macOS arm64** and **Linux x86_64
 
 | Platform                       | maxdim=1 | maxdim=2 | overall median |
 |------------------------------- |---------:|---------:|---------------:|
-| **Linux x86_64 / 16 cores**     | **0.97×** | **1.58×** | **1.30×** |
-| macOS arm64 (single benchmark) | 0.63×    | 1.10×    | 0.79×          |
+| **Linux x86_64 / 16 cores**     | **0.97x** | **1.58x** | **1.30x** |
+| macOS arm64 (single benchmark) | 0.63x    | 1.10x    | 0.79x          |
 
-Headline Linux maxdim=2 result: peak **1.91×** on torus n=300. Per-dimension
+Headline Linux maxdim=2 result: peak **1.91x** on torus n=300. Per-dimension
 persistence values match `ripser.py` exactly on both platforms
 (`counts_match=True | birth/death values match=True`).
 
@@ -55,8 +55,8 @@ Same harness, same matrices:
 
 | Platform                       | v0.8.0 maxdim=1 | v0.8.0 maxdim=2 | v0.8.0 overall | v0.9.0 deltas                          |
 |------------------------------- |----------------:|----------------:|--------------:|----------------------------------------:|
-| Linux x86_64 / 16 cores        | 0.97×           | 1.03×           | 1.03×         | maxdim=2 **+0.55×**                  |
-| macOS arm64 (single benchmark) | 0.51×           | 0.98×           | 0.70×         | overall +0.09×, maxdim=2 +0.12×       |
+| Linux x86_64 / 16 cores        | 0.97x           | 1.03x           | 1.03x         | maxdim=2 **+0.55x**                  |
+| macOS arm64 (single benchmark) | 0.51x           | 0.98x           | 0.70x         | overall +0.09x, maxdim=2 +0.12x       |
 
 #### Shuffle null models with explicit parameters
 
@@ -114,7 +114,7 @@ not establish agreement with the ASA workflow or any paper.
   coboundary enumeration
 - **Memory optimization**: Structure-of-Arrays reduction matrix,
   k-major binomial coefficient table, packed `(index, coefficient)`
-  `EntryT` (24 → 16 bytes), GAT-based static-dispatch cofacet
+  `EntryT` (24 to 16 bytes), GAT-based static-dispatch cofacet
   enumeration with inline simplex-vertex stack array
 - **Parallel processing**: Multi-threading with Rayon (enabled by default)
 - **Full Compatibility**: Drop-in replacement for `ripser.py` with identical API
@@ -139,17 +139,17 @@ thigmotaxis wall-following.
 
 #### Performance Snapshot
 
-The spatial backend delivers ~700× runtime speedups vs. the pure-Python
+The spatial backend delivers ~700x runtime speedups vs. the pure-Python
 reference when integrating long trajectories.  Benchmarked with
 `benchmarks/spatial/step_scaling_benchmark.py` (`dt=0.02`, repeats=1).
 
 | Steps | RatInABox Runtime | canns-lib Runtime | Speedup |
 |------:|------------------:|------------------:|--------:|
-| 10²   | 0.020 s | <0.001 s | 477× |
-| 10³   | 0.190 s | <0.001 s | 713× |
-| 10⁴   | 1.928 s | 0.003 s | 732× |
-| 10⁵   | 19.481 s | 0.027 s | 718× |
-| 10⁶   | 192.775 s | 0.266 s | 726× |
+| 10²   | 0.020 s | <0.001 s | 477x |
+| 10³   | 0.190 s | <0.001 s | 713x |
+| 10⁴   | 1.928 s | 0.003 s | 732x |
+| 10⁵   | 19.481 s | 0.027 s | 718x |
+| 10⁶   | 192.775 s | 0.266 s | 726x |
 
 ![Spatial Runtime Scaling](benchmarks/spatial/step_scaling_runtime.png)
 
@@ -363,7 +363,7 @@ A CUDA toolkit is **not** required to build it. `build.rs` compiles
 toolkit is on `PATH`; without one the build still succeeds and the driver
 JIT-compiles the same kernel file through NVRTC at run time. If there is no
 usable device, or the driver refuses the kernel, the run falls back to the CPU
-pre-pass — the library never *requires* a GPU to be correct, and the barcode
+pre-pass - the library never *requires* a GPU to be correct, and the barcode
 does not change.
 
 To see which path a run actually took, set `CANNS_RIPSER_STATS=1` and read
@@ -423,7 +423,7 @@ that turns them into numbers.
 - **Sparse queries**: O(log k) binary search vs O(k) linear scan
 - **Cache-friendly data structures**: SoA matrix layout, k-major binomial tables
 - **Packed simplex entries**: `(index, coefficient)` packed into one
-  64-bit word, halving `DiameterEntryT` size from 24 → 16 bytes
+  64-bit word, halving `DiameterEntryT` size from 24 to 16 bytes
 
 ## License
 

@@ -343,7 +343,7 @@ where
         // passes with no comparisons. Same comparator, same tie-break, so
         // this is a pure removal of work, not a change of semantics.
         //
-        // ⚠️ The DEDUP CANNOT BE SKIPPED WITH IT. The kernel writes one entry
+        // NOTE: The DEDUP CANNOT BE SKIPPED WITH IT. The kernel writes one entry
         // per (parent simplex, cofacet) pair, and a d-simplex is a cofacet of
         // d+1 different (d-1)-simplices, so the same column index is written
         // d+1 times -- always with the same diameter, because a cofacet's

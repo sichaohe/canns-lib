@@ -27,7 +27,7 @@ changes interact with both:
                 this is the arm the sparse false positive used to ruin)
   cap  + CAP: the capped matrix at the cap                (the dense path)
 
-⚠ EVERY BUILD MUST BE COMPILED WITH THE `gpu` FEATURE. The GPU apparent
+NOTE: EVERY BUILD MUST BE COMPILED WITH THE `gpu` FEATURE. The GPU apparent
   pre-pass lives behind `#[cfg(feature = "gpu")]` and the feature is NOT in
   `default` and NOT in `[tool.maturin] features` (on purpose: the released
   wheel must build without nvcc). A build without it silently falls back to
@@ -71,12 +71,11 @@ ARMS = [
     ("cap_CAP", "capped", CAP),
 ]
 
-# The shared core: the host's paths, the foreign-load-measured child
-# runner, the parsers, the CSV writer and the build identity. This
-# import has to be HERE, in the parent's scope: the one inside the
-# child script string below is the child's, and the parent does not
-# get it -- so `bench_core.with_foreign` raised NameError and the
-# runner died before it measured anything.
+# The shared core: the host's paths, the foreign-load-measured child runner,
+# the parsers, the CSV writer and the build identity. This import has to be
+# HERE, in the parent's scope: the one inside the child script string below
+# is the child's, so `bench_core.with_foreign` raised NameError and the runner
+# died before it measured anything.
 import bench_core
 
 CHILD = r'''

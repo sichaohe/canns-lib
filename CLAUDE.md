@@ -51,41 +51,40 @@ PYO3_PYTHON="$VIRTUAL_ENV/bin/python" maturin build --release --strip --out dist
 ## Repository Layout
 ```
 canns-lib/
-├── Cargo.toml             # Single crate manifest
-├── src/
-│   ├── lib.rs             # Registers PyO3 package and submodules
-│   ├── ripser/            # Ripser implementation
-│   └── spatial/           # Spatial navigation implementation
-├── python/canns_lib/
-│   ├── __init__.py        # Re-export ripser, spatial, __version__
-│   ├── _version.py        # Single version source
-│   ├── ripser/            # Python convenience wrapper
-│   └── spatial/           # Python shim for spatial backend
-├── benchmarks/            # Benchmark scripts & outputs
-├── docs/                  # Design docs (e.g., spatial module plan)
-├── ref/                   # Reference material
-└── tests/                 # Python regression tests
+|-- Cargo.toml             # Single crate manifest
+|-- src/
+|   |-- lib.rs             # Registers PyO3 package and submodules
+|   |-- ripser/            # Ripser implementation
+|   `-- spatial/           # Spatial navigation implementation
+|-- python/canns_lib/
+|   |-- __init__.py        # Re-export ripser, spatial, __version__
+|   |-- _version.py        # Single version source
+|   |-- ripser/            # Python convenience wrapper
+|   `-- spatial/           # Python shim for spatial backend
+|-- benchmarks/            # Benchmark scripts & outputs
+|-- docs/                  # Design docs (e.g., spatial module plan)
+|-- ref/                   # Reference material
+`-- tests/                 # Python regression tests
 ```
 
 ## What the work is now (2026-10-28)
 
 **The paper is parked. The measurements are not.** The paper's drafts, its
-report and the notes about them were moved to `paper-parked/` in the
-experiment record (`/Volumes/home/projects/ph_work`), and the paper's
-artefact layer left this repository: the nineteen checkers, the
-table-to-checker map, the five report renderers, the shuffle protocol and
-the three result tables that had been committed here.
+report and the notes about them moved to `paper-parked/` in the experiment
+record (`/Volumes/home/projects/ph_work`), and the paper's artefact layer
+left this repository: the nineteen checkers, the table-to-checker map, the
+five report renderers, the shuffle protocol and the three result tables that
+had been committed here.
 
 What the checkers did that still has to happen now lives where the numbers
 are produced: a runner compares the barcodes of the arms it measures, and
 the quiet-window gate is `harness/bench_core.py`'s `foreign_summary` and
 `batch_is_clean`, which every driver and the fetch script call.
 
-**The goal is the engine's performance, measured across benchmarks** --
-the standard suite, the scale scan, the head-to-head against ripser++ and
-the grid-cells corpus, which is our own benchmark and the one that matters
-most. A change is judged by what it does to those tables, not by whether it
-supports a sentence.
+**The goal is the engine's performance, measured across benchmarks:** the
+standard suite, the scale scan, the head-to-head against ripser++ and the
+grid-cell corpus, which is our own benchmark and the one that matters most.
+A change is judged by what it does to those tables.
 
 ## Implementation Notes
 

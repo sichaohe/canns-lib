@@ -99,6 +99,6 @@ if __name__ == "__main__":
         test_comp.test_triangle_comparison()
         test_comp.test_square_comparison()
         test_comp.test_h2_comparison_tetrahedron()
-        print("✅ All comparison tests passed!")
+        print("OK All comparison tests passed!")
     else:
-        print("⚠️ Original ripser.py not available - skipping comparison tests")
+        print("NOTE: Original ripser.py not available - skipping comparison tests")

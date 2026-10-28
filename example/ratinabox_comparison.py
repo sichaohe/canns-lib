@@ -34,7 +34,7 @@ try:
     RATINABOX_AVAILABLE = True
 except ImportError:
     RATINABOX_AVAILABLE = False
-    print("⚠️  RatInABox not installed - showing canns-lib examples only")
+    print("NOTE:  RatInABox not installed - showing canns-lib examples only")
 
 from canns_lib import spatial
 
@@ -85,7 +85,7 @@ def demo_agent_parameter_access() -> None:
         print(f"  agent.speed_std = {riab_agent.speed_std}")
         print(f"  agent.thigmotaxis = {riab_agent.thigmotaxis}")
 
-    print("\n✅ API Parity: Both libraries support direct parameter access!")
+    print("\nOK API Parity: Both libraries support direct parameter access!")
 
 
 def demo_dt_default_behavior() -> None:
@@ -106,7 +106,7 @@ def demo_dt_default_behavior() -> None:
     agent.update(dt=0.05)  # Override with dt=0.05
     print(f"  After update(dt=0.05): {agent.t}")
 
-    print("\n✅ API Parity: dt is optional in both libraries!")
+    print("\nOK API Parity: dt is optional in both libraries!")
 
 
 def demo_environment_plotting() -> None:
@@ -141,7 +141,7 @@ def demo_environment_plotting() -> None:
         fig.savefig(OUTPUT_DIR / "comparison_env_sidebyside.png", dpi=150, bbox_inches='tight')
         plt.close(fig)
         print(f"  ✓ Saved: {OUTPUT_DIR / 'comparison_env_sidebyside.png'}")
-        print("\n✅ Both plots show identical environments with the same API!")
+        print("\nOK Both plots show identical environments with the same API!")
     else:
         # Only canns-lib available
         fig, ax = plt.subplots(figsize=(6, 6))
@@ -153,7 +153,7 @@ def demo_environment_plotting() -> None:
         fig.savefig(OUTPUT_DIR / "comparison_env_method.png", dpi=150, bbox_inches='tight')
         plt.close(fig)
         print(f"  ✓ Saved: {OUTPUT_DIR / 'comparison_env_method.png'}")
-        print("\n✅ API Parity: env.plot_environment() method works!")
+        print("\nOK API Parity: env.plot_environment() method works!")
 
 
 def demo_complete_workflow() -> None:
@@ -213,7 +213,7 @@ def demo_complete_workflow() -> None:
         fig.savefig(OUTPUT_DIR / "comparison_workflow_sidebyside.png", dpi=150, bbox_inches='tight')
         plt.close(fig)
         print(f"  ✓ Saved: {OUTPUT_DIR / 'comparison_workflow_sidebyside.png'}")
-        print("\n✅ Both workflows produce similar trajectories with identical code!")
+        print("\nOK Both workflows produce similar trajectories with identical code!")
     else:
         # Only canns-lib available
         fig, ax = plt.subplots(figsize=(8, 8))
@@ -240,7 +240,7 @@ def demo_complete_workflow() -> None:
         fig.savefig(OUTPUT_DIR / "comparison_complete.png", dpi=150, bbox_inches='tight')
         plt.close(fig)
         print(f"  ✓ Saved: {OUTPUT_DIR / 'comparison_complete.png'}")
-        print("\n✅ The workflow demonstrates full API compatibility!")
+        print("\nOK The workflow demonstrates full API compatibility!")
 
 
 def main() -> None:
@@ -256,7 +256,7 @@ def main() -> None:
     demo_complete_workflow()
 
     print_section("Summary")
-    print("\n✅ API Parity Achievements:")
+    print("\nOK API Parity Achievements:")
     print("  1. Agent parameter access: agent.dt, agent.speed_mean, etc.")
     print("  2. Environment plotting: env.plot_environment()")
     print("  3. dt default behavior: agent.update() uses stored dt")

@@ -254,7 +254,7 @@ pub fn reduce_columns(
     // Ascending rank == ascending pivot priority (least-pivot first): larger
     // diameter first, then smaller index first. Non-negative finite diameters
     // compare correctly via their bit patterns. The last rank is thus the
-    // (smallest diameter, largest index) entry — the correct pivot.
+    // (smallest diameter, largest index) entry - the correct pivot.
     distinct.sort_unstable_by(|a, b| {
         b.get_diameter()
             .to_bits()

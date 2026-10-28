@@ -397,16 +397,16 @@ The codebase is organized as:
 
 ```
 canns-lib/
-├── src/
-│   ├── lib.rs           # Main PyO3 module registration
-│   ├── ripser/          # Ripser module implementation
-│   └── spatial/         # Spatial module implementation
-├── python/canns_lib/
-│   ├── __init__.py      # Python package entry point
-│   ├── ripser/          # Ripser Python wrapper
-│   └── spatial/         # Spatial Python wrapper
-├── tests/               # Python tests
-└── benchmarks/          # Performance benchmarks
+|-- src/
+|   |-- lib.rs           # Main PyO3 module registration
+|   |-- ripser/          # Ripser module implementation
+|   `-- spatial/         # Spatial module implementation
+|-- python/canns_lib/
+|   |-- __init__.py      # Python package entry point
+|   |-- ripser/          # Ripser Python wrapper
+|   `-- spatial/         # Spatial Python wrapper
+|-- tests/               # Python tests
+`-- benchmarks/          # Performance benchmarks
 ```
 
 ## Community

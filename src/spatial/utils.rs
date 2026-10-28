@@ -62,12 +62,12 @@ pub(crate) fn ornstein_uhlenbeck(
 /// the speed magnitude sqrt(vx² + vy²) naturally follows a Rayleigh distribution.
 ///
 /// Conversion steps:
-/// 1. Rayleigh → Uniform (via Rayleigh CDF)
-/// 2. Uniform → Normal (via normal inverse CDF)
+/// 1. Rayleigh to Uniform (via Rayleigh CDF)
+/// 2. Uniform to Normal (via normal inverse CDF)
 ///
 /// # Arguments
 /// * `x` - Rayleigh-distributed speed value
-/// * `sigma` - Rayleigh scale parameter (note: Rayleigh mean ≈ 1.253 * sigma)
+/// * `sigma` - Rayleigh scale parameter (note: Rayleigh mean ~ 1.253 * sigma)
 ///
 /// # Returns
 /// Corresponding standard normal distribution value
@@ -91,8 +91,8 @@ pub(crate) fn rayleigh_to_normal(x: f64, sigma: f64) -> f64 {
 /// Used to convert normal space values back to speed space after OU update.
 ///
 /// Conversion steps:
-/// 1. Normal → Uniform (via normal CDF)
-/// 2. Uniform → Rayleigh (via Rayleigh inverse CDF)
+/// 1. Normal to Uniform (via normal CDF)
+/// 2. Uniform to Rayleigh (via Rayleigh inverse CDF)
 ///
 /// # Arguments
 /// * `x` - Standard normal distribution value

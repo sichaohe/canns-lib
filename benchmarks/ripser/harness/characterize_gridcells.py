@@ -44,12 +44,11 @@ import numpy as np
 GRID = "/home/sichaohe/gridcells/matrices"
 PY = "/home/sichaohe/miniconda3/envs/rl/bin/python"
 
-# The shared core: the host's paths, the foreign-load-measured child
-# runner, the parsers, the CSV writer and the build identity. This
-# import has to be HERE, in the parent's scope: the one inside the
-# child script string below is the child's, and the parent does not
-# get it -- so `bench_core.with_foreign` raised NameError and the
-# runner died before it measured anything.
+# The shared core: the host's paths, the foreign-load-measured child runner,
+# the parsers, the CSV writer and the build identity. This import has to be
+# HERE, in the parent's scope: the one inside the child script string below
+# is the child's, so `bench_core.with_foreign` raised NameError and the runner
+# died before it measured anything.
 import bench_core
 
 CHILD = r'''
