@@ -2449,7 +2449,7 @@ where
                  loop_s={:.3} nonapparent_loop_s={:.3} nonapparent_cols={} \
                  scan_s={:.3} fill_s={:.3} reduce_s={:.3} push_s={:.3} pop_s={:.3} rounds={} heap_max={} redheap_max={} col_rounds_max={} \
                  bd_pairs={} pivots={} reserve_bound={} pre_loop_s={:.6} reserve_s={:.6} \
-                 ratio_filter_survives={:.6} gpu_err=\"{}\"",
+                 ratio_filter_survives={:.6} reject_frac={:.4} early_exit={} gpu_err=\"{}\"",
                 columns_to_reduce.len(),
                 stat_pre_pass,
                 compute_t0.elapsed().as_secs_f64(),
@@ -2494,6 +2494,10 @@ where
                 stat_pre_loop_s,
                 stat_reserve_s,
                 apparent_pairs_reported as f64 / columns_to_reduce.len().max(1) as f64,
+                // THE GATE'S VERDICT, so that every table says whether the
+                // early exit was in force and why.
+                crate::ripser::matrix::dense::rejection_fraction(),
+                crate::ripser::matrix::dense::early_exit_active(),
                 gpu_err
             );
         }

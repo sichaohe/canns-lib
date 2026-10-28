@@ -5,26 +5,102 @@ use crate::ripser::types::{CoefficientT, DiameterEntryT, DiameterIndexT, IndexT,
 use crate::ripser::utils::{modp, BinomialCoeffTable};
 use std::sync::OnceLock;
 
-/// Whether the cofacet enumerator may stop reading distances as soon as the
+/// How the cofacet enumerator may stop reading distances as soon as the
 /// running maximum is already above the threshold.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum EarlyExitMode {
+    /// The environment asked for it, whatever the data says.
+    ForcedOn,
+    /// The environment asked for the old behaviour.
+    ForcedOff,
+    /// The data decides.
+    Gated,
+}
+
+/// The fraction of the pairs the threshold REJECTS, in millionths.
 ///
-/// ON by default. `CANNS_RIPSER_COFACET_EARLY_EXIT=0` turns it off, which is
-/// the ablation arm: it restores the old behaviour of paying all `dim + 1`
-/// distance reads for every candidate, including the ~99% that are
-/// rejected. The switch is read once, so the hot path carries no environment
-/// lookup -- only a branch on a bool that never changes.
-fn early_exit_enabled() -> bool {
-    static ENABLED: OnceLock<bool> = OnceLock::new();
-    *ENABLED.get_or_init(|| {
-        std::env::var("CANNS_RIPSER_COFACET_EARLY_EXIT")
-            .map(|v| {
-                !matches!(
-                    v.trim(),
-                    "0" | "false" | "False" | "no" | "No" | "off" | "OFF"
-                )
-            })
-            .unwrap_or(true)
-    })
+/// WHAT DECIDES THE EARLY EXIT. The early exit saves the distance reads of
+/// the candidates the threshold rejects, and it costs one comparison per
+/// read. So it pays when the rejection rate is high, and it LOSES when the
+/// rejection rate is low -- measured on the 1,200-vertex scale-scan instance,
+/// where the matrix is 5.76 MB and every read is a cache hit:
+///
+/// | threshold | early exit off | early exit on | |
+/// |---|---|---|---|
+/// | T (the maximum finite distance) | 12.63 s | 14.67 s | 1.16x, a loss |
+/// | T/2 | 7.92 s | 10.48 s | 1.32x, a loss |
+/// | T/4 | 1.15 s | 1.04 s | 0.90x, a win |
+/// | T/10 | 0.65 s | 0.27 s | 0.41x, a win |
+///
+/// The same switch is 1.9x FASTER on `o3_4096`, where 98.7% of the
+/// candidates are rejected and the matrix is 33.5 MB, so every read it skips
+/// is a DRAM miss. The sign of the effect is therefore a property of the
+/// DATA, not of the code.
+///
+/// The fraction is the complement of the fraction of pairs the threshold
+/// keeps, which the algorithm layer knows exactly: it is the number of edges
+/// in the filtration against the number of pairs. It is set once per call,
+/// before the reduction starts.
+static REJECTION_FRACTION: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+
+/// The rejection rate above which the early exit pays for itself.
+///
+/// Measured on the benchmark host: the crossover sits between a rejection
+/// rate of about 40% (where the early exit loses 32%) and about 80% (where
+/// it wins 10%), on a matrix whose reads are cache hits. On a matrix whose
+/// reads are DRAM misses the crossover is much lower, which is the case the
+/// early exit was written for.
+const EARLY_EXIT_REJECTION_GATE: u32 = 700_000;
+
+/// The fraction of pairs the threshold rejects, as the gate sees it.
+///
+/// Reported in the STATS line, because the early exit's effect depends on it
+/// and a table that does not say which way the gate went cannot be read.
+pub fn rejection_fraction() -> f64 {
+    REJECTION_FRACTION.load(std::sync::atomic::Ordering::Relaxed) as f64 / 1_000_000.0
+}
+
+/// Whether the early exit is in force for this call.
+pub fn early_exit_active() -> bool {
+    early_exit_allowed()
+}
+
+/// Set the fraction of pairs the threshold rejects. Called by the algorithm
+/// layer, once per call, before the reduction.
+pub fn set_rejection_fraction(fraction: f64) {
+    let millionths = if fraction.is_finite() && fraction > 0.0 {
+        (fraction * 1_000_000.0).min(1_000_000.0) as u32
+    } else {
+        0
+    };
+    REJECTION_FRACTION.store(millionths, std::sync::atomic::Ordering::Relaxed);
+}
+
+/// Whether the early exit may stop reading distances early.
+///
+/// `CANNS_RIPSER_COFACET_EARLY_EXIT=0` restores the old behaviour of paying
+/// all `dim + 1` distance reads for every candidate; `=1` forces the early
+/// exit on whatever the data says, which is what the A/B table measures.
+/// With neither, the data decides.
+fn early_exit_allowed() -> bool {
+    static MODE: OnceLock<EarlyExitMode> = OnceLock::new();
+    let mode = *MODE.get_or_init(|| {
+        match std::env::var("CANNS_RIPSER_COFACET_EARLY_EXIT") {
+            Ok(v) => match v.trim() {
+                "0" | "false" | "False" | "no" | "No" | "off" | "OFF" => EarlyExitMode::ForcedOff,
+                "1" | "true" | "True" | "yes" | "Yes" | "on" | "ON" => EarlyExitMode::ForcedOn,
+                _ => EarlyExitMode::Gated,
+            },
+            Err(_) => EarlyExitMode::Gated,
+        }
+    });
+    match mode {
+        EarlyExitMode::ForcedOn => true,
+        EarlyExitMode::ForcedOff => false,
+        EarlyExitMode::Gated => {
+            REJECTION_FRACTION.load(std::sync::atomic::Ordering::Relaxed) >= EARLY_EXIT_REJECTION_GATE
+        }
+    }
 }
 
 // Note: Removed ripser compatibility traits since we're eliminating ripser_old
@@ -456,7 +532,7 @@ where
                 // distance, and `d >= INFINITY` is exactly `d == INFINITY`.
                 f32::INFINITY
             },
-            early_exit: early_exit_enabled(),
+            early_exit: early_exit_allowed(),
         }
     }
 }

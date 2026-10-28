@@ -8,6 +8,41 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Performance
+- **A GPU build no longer creates a CUDA context to answer a question about
+  the GPU.** `gpu::last_error()` called `device()`, and `device()` creates the
+  context -- and the reduction called `last_error()` on every call, to fill in
+  one statistics field. Every call of a GPU build therefore paid ~0.245 s for
+  a context it might never use, including the calls whose work was far too
+  small to be worth the device. The error is now recorded when the device is
+  initialised, so asking for it is free: the first call on a small instance
+  goes from 0.248 s to 0.006 s, the same as the CPU build.
+- **The GPU apparent pre-pass is only taken when it repays the device.** The
+  context costs ~0.245 s per process and the pre-pass saves ~60 ns per
+  column, so the device only pays for itself at about four million columns --
+  and the grid-cell corpus runs at dimension 1 on 1200-vertex matrices, 500K
+  columns, where the pre-pass saves 40 ms and the device costs 245 ms. That is
+  why the corpus was 25% slower on the GPU build than on the CPU build
+  (1.366 s against 1.095 s, against ripser++'s 2.015 s): the device was paid
+  for per cell, and the corpus measures one cell per process. The count is
+  cumulative over the process's calls, because the context is paid once -- a
+  process that makes many calls on small instances earns the device, and one
+  that makes a single call on a small instance does not pay for it. The corpus
+  cells now measure the same on both builds (1.025 s against 1.019 s on the
+  first matrix), with identical barcodes.
+- **The cofacet enumerator's state is hoisted out of its loop, and the early
+  exit tests the distance just read rather than the running maximum.** The two
+  tests are the same one: the running maximum can only reach `reject_at`
+  through a READ, because the simplex's own diameter is <= the threshold and
+  `reject_at` is the next float above it -- so `d >= reject_at` fires exactly
+  when the running maximum would have, and it is one link shorter on the
+  critical path. Measured on the 1,200-vertex scale-scan instance: 15.16 s
+  against 15.41 s before the change, and 12.61 s with the early exit off. The
+  early exit's cost on that instance is 16-21% and its saving on `o3_4096` is
+  1.9x; what decides the sign is the REJECTION RATE, measured by lowering the
+  threshold on the same matrix: at the threshold the early exit loses 16%, at
+  a quarter of it it wins 10%, and at a tenth it wins 2.4x. The switch is
+  therefore not a general speed-up of the reduction and the table that
+  measures it has to say so.
 - **The cofacet enumerator stops reading distances for a cofacet the threshold
   already rejects.** The enumerator used to read all `dim + 1` distances of a
   candidate cofacet before the caller could reject it on the threshold. On
