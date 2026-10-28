@@ -29,6 +29,28 @@ def load(path):
         return {r["key"]: r for r in csv.DictReader(fh)}
 
 
+def worst_foreign(rows):
+    """The largest foreign-load reading among the given rows (0.0 if none)."""
+    out = 0.0
+    for r in rows:
+        try:
+            out = max(out, float(r.get("foreign_cpu") or 0.0))
+        except (TypeError, ValueError):
+            pass
+    return out
+
+
+def worst_foreign_max(rows):
+    """The largest foreign-load peak among the given rows (0.0 if none)."""
+    out = 0.0
+    for r in rows:
+        try:
+            out = max(out, float(r.get("foreign_max") or 0.0))
+        except (TypeError, ValueError):
+            pass
+    return out
+
+
 def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--a", required=True, help="the baseline build's table")
@@ -65,12 +87,18 @@ def main() -> int:
             "bounds_md5": rb["h1_md5_ours"],
             "barcode_same": "yes" if same else "no",
             "verdict": "SAME_BARCODE" if same else "BARCODE_MISMATCH",
+            # The quiet-window reading is carried over from the two tables
+            # this summary compares, so the summary can be gated too: the
+            # worst reading of either side is the worst reading of the
+            # comparison.
+            "foreign_cpu": "%.4f" % worst_foreign([ra, rb]),
+            "foreign_max": "%.3f" % worst_foreign_max([ra, rb]),
         })
         print("%-46s %8.3f -> %8.3f  %.4f  %s"
               % (k, sa, sb, sb / sa, rows[-1]["verdict"]))
 
     fields = ["key", "ship_s", "bounds_s", "ratio", "ship_md5", "bounds_md5",
-              "barcode_same", "verdict"]
+              "barcode_same", "verdict", "foreign_cpu", "foreign_max"]
     with open(args.out, "w", newline="") as fh:
         w = csv.DictWriter(fh, fieldnames=fields)
         w.writeheader()

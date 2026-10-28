@@ -68,6 +68,12 @@ import time
 import numpy as np
 
 import foreign_cpu
+# The measurement lock lives in bench_core, and this import has to be in the
+# PARENT's scope. The one inside the child script string further down is the
+# child's: the parent never gets it, so `bench_core.measurement_lock` raised
+# NameError and the run died before it measured anything. The symptom was a
+# scale scan that "came out contaminated" in zero seconds.
+import bench_core
 
 PY = "/home/sichaohe/miniconda3/envs/rl/bin/python"
 PP = "/home/sichaohe/ph_work/ripserpp/ripserplusplus/build3/ripser++"
@@ -302,6 +308,14 @@ def main() -> int:
     env, dev = gpu_env()
     print("commit=%s  our_md5=%s  ref_md5=%s  threads=%d  device=%s"
           % (commit, our_md5, pp_md5, threads, dev), flush=True)
+    # THE MEASUREMENT LOCK, taken for the whole run. These runners spawn their
+    # children directly rather than through bench_core, so the lock has to be
+    # taken here: the quiet-window gate counts the cores used by processes
+    # that are NOT ours, and it cannot see two of our own measurements
+    # running beside each other -- which moves the numbers exactly as much as
+    # a neighbour's job does. The lock is released when the process exits.
+    _LOCK = bench_core.measurement_lock(label="scale_scan")
+    _LOCK.__enter__()
 
     rows = []
     for n in [int(x) for x in args.sizes.split(",") if x.strip()]:

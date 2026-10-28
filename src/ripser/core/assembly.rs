@@ -121,6 +121,7 @@ where
             self.n,
             &self.binomial_coeff,
             self.modulus,
+            self.threshold,
         );
         while cofacets.has_next(false) {
             let cofacet = cofacets.next();

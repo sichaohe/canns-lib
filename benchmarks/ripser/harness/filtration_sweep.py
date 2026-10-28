@@ -66,6 +66,8 @@ import numpy as np
 site, thresh, mode = sys.argv[1], float(sys.argv[2]), sys.argv[3]
 sys.path.insert(0, site)
 from canns_lib.ripser import ripser
+
+import bench_core
 d = np.load("/home/sichaohe/ph_work/ph_dm_1200.npy")
 np.fill_diagonal(d, 0.0)
 if mode == "capped":
@@ -88,14 +90,17 @@ print("MD5 " + md5)
 '''
 
 FIELDS = ["rep", "side", "build", "arm", "filtration", "input_form", "thresh",
-          "wall_s", "wall_cold_s", "proc_s", "bars", "md5", "verdict"]
+          "wall_s", "wall_cold_s", "proc_s", "bars", "md5", "verdict",
+          "foreign_cpu", "foreign_max"]
 
 
 def run_ours(mode, thresh, timeout=900):
-    p = subprocess.run(["/usr/bin/time", "-f", "__T__%e", PY, "-c", CHILD,
-                        SITE, repr(thresh), mode],
-                       capture_output=True, text=True, timeout=timeout)
-    out = {}
+    p, foreign, foreign_max = bench_core.with_foreign(
+        subprocess.run,
+        ["/usr/bin/time", "-f", "__T__%e", PY, "-c", CHILD,
+         SITE, repr(thresh), mode],
+        capture_output=True, text=True, timeout=timeout)
+    out = {"foreign_cpu": foreign, "foreign_max": foreign_max}
     for line in p.stdout.splitlines():
         if " " in line:
             k, _, v = line.partition(" ")
@@ -107,7 +112,8 @@ def run_ours(mode, thresh, timeout=900):
 
 
 def run_pp(thresh, timeout=900):
-    p = subprocess.run(
+    p, foreign, foreign_max = bench_core.with_foreign(
+        subprocess.run,
         ["/usr/bin/time", "-f", "__T__%e", RP, "--format", "distance",
          "--dim", "2", "--threshold", "%.10g" % thresh, "--ratio", "1.0", PP_TXT],
         capture_output=True, text=True, timeout=timeout)
@@ -123,7 +129,8 @@ def run_pp(thresh, timeout=900):
     bars = sum(1 for ln in p.stdout.splitlines() if ln.startswith(" ["))
     return {"wall_s": lib.group(1) if lib else "",
             "proc_s": m.group(1) if m else "",
-            "bars": str(bars), "rc": p.returncode}
+            "bars": str(bars), "rc": p.returncode,
+            "foreign_cpu": foreign, "foreign_max": foreign_max}
 
 
 def main() -> int:
@@ -143,7 +150,9 @@ def main() -> int:
                          "wall_s": r.get("WALL", ""), "proc_s": r.get("PROC", ""),
                          "wall_cold_s": r.get("WALL_COLD", ""),
                          "bars": r.get("BARS", ""),
-                         "md5": r.get("MD5", ""), "verdict": verdict})
+                         "md5": r.get("MD5", ""), "verdict": verdict,
+                         "foreign_cpu": r.get("foreign_cpu", ""),
+                         "foreign_max": r.get("foreign_max", "")})
             print("rep=%d ours %-8s %.3f %s" % (rep, arm, float(r.get("WALL", 0)), verdict), flush=True)
         for pp_arm, thresh in PP_ARMS:
             r = run_pp(thresh)
@@ -152,7 +161,9 @@ def main() -> int:
                          "input_form": "capped", "thresh": thresh,
                          "wall_s": r.get("wall_s", ""), "proc_s": r.get("proc_s", ""),
                          "bars": r.get("bars", ""),
-                         "md5": "", "verdict": "OK" if r.get("bars") == "1734" else "BADCODEC"})
+                         "md5": "", "verdict": "OK" if r.get("bars") == "1734" else "BADCODEC",
+                         "foreign_cpu": r.get("foreign_cpu", ""),
+                         "foreign_max": r.get("foreign_max", "")})
             print("rep=%d ripserpp %-4s %s %s" % (rep, pp_arm, r.get("wall_s"), r.get("bars")), flush=True)
 
     with open(args.out, "w", newline="") as fh:

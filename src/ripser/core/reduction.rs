@@ -723,9 +723,14 @@ where
     /// diameter equals the simplex diameter. Sentinel (index -1) if none.
     fn get_zero_pivot_cofacet(&self, simplex: DiameterEntryT, dim: IndexT) -> DiameterEntryT {
         let target = simplex.get_diameter();
-        let mut cofacets =
-            self.dist
-                .cofacet_enumerator(simplex, dim, self.n, &self.binomial_coeff, self.modulus);
+        let mut cofacets = self.dist.cofacet_enumerator(
+            simplex,
+            dim,
+            self.n,
+            &self.binomial_coeff,
+            self.modulus,
+            self.threshold,
+        );
         while cofacets.has_next(true) {
             let cofacet = cofacets.next();
             apparent_stats::count_cofacet();
@@ -942,9 +947,14 @@ where
     ) -> DiameterEntryT {
         let mut check_for_emergent_pair = true;
 
-        let mut cofacets =
-            self.dist
-                .cofacet_enumerator(simplex, dim, self.n, &self.binomial_coeff, self.modulus);
+        let mut cofacets = self.dist.cofacet_enumerator(
+            simplex,
+            dim,
+            self.n,
+            &self.binomial_coeff,
+            self.modulus,
+            self.threshold,
+        );
 
         while cofacets.has_next(true) {
             let cofacet = cofacets.next();
@@ -993,9 +1003,14 @@ where
         let mut visited = 0u64;
         buf.clear();
 
-        let mut cofacets =
-            self.dist
-                .cofacet_enumerator(simplex, dim, self.n, &self.binomial_coeff, self.modulus);
+        let mut cofacets = self.dist.cofacet_enumerator(
+            simplex,
+            dim,
+            self.n,
+            &self.binomial_coeff,
+            self.modulus,
+            self.threshold,
+        );
 
         while cofacets.has_next(true) {
             let cofacet = cofacets.next();
@@ -1032,9 +1047,14 @@ where
         working_coboundary: &mut WorkingT,
     ) {
         let mut visited = 0u64;
-        let mut cofacets =
-            self.dist
-                .cofacet_enumerator(simplex, dim, self.n, &self.binomial_coeff, self.modulus);
+        let mut cofacets = self.dist.cofacet_enumerator(
+            simplex,
+            dim,
+            self.n,
+            &self.binomial_coeff,
+            self.modulus,
+            self.threshold,
+        );
 
         while cofacets.has_next(true) {
             let cofacet = cofacets.next();
@@ -1055,9 +1075,14 @@ where
     ) {
         working_reduction_column.push(simplex);
         let mut visited = 0u64;
-        let mut cofacets =
-            self.dist
-                .cofacet_enumerator(simplex, dim, self.n, &self.binomial_coeff, self.modulus);
+        let mut cofacets = self.dist.cofacet_enumerator(
+            simplex,
+            dim,
+            self.n,
+            &self.binomial_coeff,
+            self.modulus,
+            self.threshold,
+        );
 
         while cofacets.has_next(true) {
             let cofacet = cofacets.next();
@@ -1341,7 +1366,15 @@ where
         let mut stat_gpu_s = 0.0f64;
         let mut stat_densify = 0.0f64;
         let mut gpu_err = crate::ripser::gpu::last_error();
-        if apparent_enabled && columns_to_reduce.len() >= crate::ripser::gpu::GPU_MIN_COLUMNS {
+        // THE DEVICE HAS TO BE WORTH IT. The GPU pre-pass is only taken when
+        // the work repays the device initialisation: the CUDA context costs
+        // ~0.245 s per process and the pre-pass saves ~60 ns per column, so
+        // a 500K-column instance saves 40 ms and pays 245 ms. The context is
+        // paid once, so the count is over the process's calls.
+        if apparent_enabled
+            && columns_to_reduce.len() >= crate::ripser::gpu::GPU_MIN_COLUMNS
+            && crate::ripser::gpu::worth_the_device(columns_to_reduce.len())
+        {
             let gpu_t0 = std::time::Instant::now();
             // `densify` unpacks the packed lower triangle into a dense n*n
             // matrix. It is INSIDE `gpu_pre_s` but OUTSIDE the GPUPHASE
@@ -2416,7 +2449,7 @@ where
                  loop_s={:.3} nonapparent_loop_s={:.3} nonapparent_cols={} \
                  scan_s={:.3} fill_s={:.3} reduce_s={:.3} push_s={:.3} pop_s={:.3} rounds={} heap_max={} redheap_max={} col_rounds_max={} \
                  bd_pairs={} pivots={} reserve_bound={} pre_loop_s={:.6} reserve_s={:.6} \
-                 ratio_filter_survives={:.6} gpu_err=\"{}\"",
+                 ratio_filter_survives={:.6} reject_frac={:.4} early_exit={} gpu_err=\"{}\"",
                 columns_to_reduce.len(),
                 stat_pre_pass,
                 compute_t0.elapsed().as_secs_f64(),
@@ -2461,6 +2494,10 @@ where
                 stat_pre_loop_s,
                 stat_reserve_s,
                 apparent_pairs_reported as f64 / columns_to_reduce.len().max(1) as f64,
+                // THE GATE'S VERDICT, so that every table says whether the
+                // early exit was in force and why.
+                crate::ripser::matrix::dense::rejection_fraction(),
+                crate::ripser::matrix::dense::early_exit_active(),
                 gpu_err
             );
         }

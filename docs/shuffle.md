@@ -13,7 +13,7 @@ selected point cloud or reusing the real-data PCA or graph changes the null
 model. Use the coordinated [CANNs PR #103](https://github.com/Routhleck/canns/pull/103)
 for the full ASA workflow, including its optional Rust kernels.
 
-See the [complete ASA benchmark protocol](../benchmarks/ripser/ASA_SHUFFLE.md)
+See the [complete ASA benchmark protocol](https://github.com/Routhleck/canns/pull/103)
 for comparison with the original Python multiprocessing implementation.
 
 ## Feature-space shuffle

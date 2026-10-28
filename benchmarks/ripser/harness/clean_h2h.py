@@ -41,6 +41,9 @@ import statistics
 import sys
 import time
 
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import bench_core
+
 PY = "/home/sichaohe/miniconda3/envs/rl/bin/python"
 ASA_NPY = "/home/sichaohe/ph_work/ph_dm_1200.npy"
 PP_TXT = "/tmp/asa1200_full.txt"
@@ -168,10 +171,12 @@ def run_ours(timeout: int, coeff: int):
     # import, numpy load on ours; CUDA init and the text load on ripser++'s)
     # were invisible -- which is exactly how two tables of the same
     # comparison ended up quoting different ratios.
-    p = subprocess.run(["/usr/bin/time", "-f", "__T__%e %M", PY, "-c", CHILD,
-                        SITE, repr(T), str(coeff)],
-                       capture_output=True, text=True, env=env, timeout=timeout)
-    rec = {"rc": p.returncode}
+    p, foreign, foreign_max = bench_core.with_foreign(
+        subprocess.run,
+        ["/usr/bin/time", "-f", "__T__%e %M", PY, "-c", CHILD,
+         SITE, repr(T), str(coeff)],
+        capture_output=True, text=True, env=env, timeout=timeout)
+    rec = {"rc": p.returncode, "foreign_cpu": foreign, "foreign_max": foreign_max}
     for line in p.stdout.splitlines():
         if " " in line:
             k, _, v = line.partition(" ")
@@ -205,11 +210,12 @@ def run_ours(timeout: int, coeff: int):
 
 
 def run_ripserpp(timeout: int):
-    p = subprocess.run(
+    p, foreign, foreign_max = bench_core.with_foreign(
+        subprocess.run,
         ["/usr/bin/time", "-f", "__T__%e %M", RP, "--format", "distance",
          "--dim", "2", "--threshold", "%.10g" % T, "--ratio", "1.0", PP_TXT],
         capture_output=True, text=True, timeout=timeout)
-    rec = {"rc": p.returncode}
+    rec = {"rc": p.returncode, "foreign_cpu": foreign, "foreign_max": foreign_max}
     err = p.stderr
     pats = {
         "pp_load_s": r"([\d.]+)s time to load distance matrix",
@@ -265,7 +271,9 @@ def main() -> int:
             # The table has to say WHICH build it measured: a head-to-head
             # without the build identity is not reproducible.
             rec = {"rep": rep, "who": who,
-                   "build": SITE if who == "ours" else "ripser++ build3"}
+                   "build": SITE if who == "ours" else "ripser++ build3",
+                   "foreign_cpu": r.get("foreign_cpu", ""),
+                   "foreign_max": r.get("foreign_max", "")}
             if who == "ours":
                 rec["wall_s"] = r.get("WALL", "")
                 rec["wall_cold_s"] = r.get("WALL_COLD", "")
@@ -322,7 +330,7 @@ def main() -> int:
               "bars", "md5", "h1top", "threads", "loadavg", "commit", "build_md5",
               "s_dim0", "s_edges", "s_d1_reduce", "s_d2_reduce", "s_d2_assemble",
               "s_d2_pivotbuild", "s_d2_gpupre", "s_d2_scan", "s_hashcopy",
-              "s_total", "gpu_err", "verdict"]
+              "s_total", "gpu_err", "foreign_cpu", "foreign_max", "verdict"]
     with open(args.out, "w", newline="") as fh:
         w = csv.DictWriter(fh, fieldnames=fields, extrasaction="ignore")
         w.writeheader()

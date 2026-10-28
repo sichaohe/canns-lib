@@ -575,6 +575,22 @@ where
         let ph_edges_s = t_entry.elapsed().as_secs_f64();
         let rss_after_edges = rss_kb();
 
+        // HOW MUCH OF THE MATRIX THE THRESHOLD REJECTS. The cofacet early
+        // exit saves the distance reads of the candidates the threshold
+        // rejects, and it costs one comparison per read, so it pays when
+        // the rejection rate is high and loses when it is low -- measured on
+        // the benchmark host, the same switch is 1.9x faster where 98.7% of
+        // the candidates are rejected and 16-32% slower where 30% are. The
+        // filtration knows the answer exactly: the edges it holds are the
+        // pairs the threshold KEEPS, and every other pair is one it
+        // rejects.
+        {
+            let pairs = (self.n as f64) * (self.n as f64 - 1.0) / 2.0;
+            let kept = edges.len() as f64;
+            let rejected = if pairs > 0.0 { 1.0 - kept / pairs } else { 0.0 };
+            crate::ripser::matrix::dense::set_rejection_fraction(rejected);
+        }
+
         // H0: get dim=1 columns_to_reduce (edges that form cycles)
         let t_dim0 = std::time::Instant::now();
         let mut columns_to_reduce = self.compute_dim_0_pairs(&edges);
@@ -936,6 +952,7 @@ where
                 self.n,
                 &self.binomial_coeff,
                 self.modulus,
+                self.threshold,
             );
 
             let mut coeff_map: FxHashMap<IndexT, CoefficientT> = FxHashMap::default();

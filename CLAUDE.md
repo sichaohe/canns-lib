@@ -67,6 +67,26 @@ canns-lib/
 └── tests/                 # Python regression tests
 ```
 
+## What the work is now (2026-10-28)
+
+**The paper is parked. The measurements are not.** The paper's drafts, its
+report and the notes about them were moved to `paper-parked/` in the
+experiment record (`/Volumes/home/projects/ph_work`), and the paper's
+artefact layer left this repository: the nineteen checkers, the
+table-to-checker map, the five report renderers, the shuffle protocol and
+the three result tables that had been committed here.
+
+What the checkers did that still has to happen now lives where the numbers
+are produced: a runner compares the barcodes of the arms it measures, and
+the quiet-window gate is `harness/bench_core.py`'s `foreign_summary` and
+`batch_is_clean`, which every driver and the fetch script call.
+
+**The goal is the engine's performance, measured across benchmarks** --
+the standard suite, the scale scan, the head-to-head against ripser++ and
+the grid-cells corpus, which is our own benchmark and the one that matters
+most. A change is judged by what it does to those tables, not by whether it
+supports a sentence.
+
 ## Implementation Notes
 
 ### Python Layer
@@ -91,3 +111,25 @@ canns-lib/
 - Maintain RatInABox API parity in the spatial module (method signatures, parameter names, history format).
 - Document new env vars or build requirements in `README.md` / `docs/`.
 - Provide updated benchmarks or screenshots for performance/UI changes.
+
+## Repository Hygiene
+
+- **Every change carries its own cleanup.** A commit that leaves a dead script,
+  a superseded copy or a stale table behind is not finished. Delete it in the
+  same commit, or say in the commit message why it stays.
+- **The benchmark tree has a written rule for what may live in it.**
+  `benchmarks/ripser/README.md` states it: a file there has to be a runner, a
+  library, a driver, a tool or a patch. A probe whose question is answered
+  does not qualify -- it goes to the paper project's process record
+  (`ph_work/history/scripts/`) and is deleted from here.
+- **Do not re-implement what `benchmarks/ripser/harness/bench_core.py` already
+  does.** It holds the host's paths, the foreign-load-measured child runner,
+  the parsers for the build's own instrumentation, the CSV writer, the
+  wrong-library guard and the build identity. They were re-implemented in
+  every runner for a year and the copies drifted.
+- **Work on a branch.** `master` carries released work; a change goes on a
+  branch and lands through a PR.
+- **A measurement script's semantics do not change.** The same input must
+  produce the same table. If a refactor is meant to preserve the output, say
+  how that was checked; if it is meant to change the output, say what changed
+  and re-measure every table that depended on it.

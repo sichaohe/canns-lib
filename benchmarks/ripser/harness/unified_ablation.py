@@ -66,6 +66,11 @@ import time
 # How much of the box was used by somebody ELSE while each variant ran --
 # see foreign_cpu.py for why the load average cannot answer it.
 import foreign_cpu
+# The measurement lock lives in bench_core, and this import has to be in the
+# PARENT's scope. The one inside the child script string further down is the
+# child's: the parent never gets it, so `bench_core.measurement_lock` raised
+# NameError and the run died before it measured anything.
+import bench_core
 
 PY = "/home/sichaohe/miniconda3/envs/rl/bin/python"
 ASA_NPY = "/home/sichaohe/ph_work/ph_dm_1200.npy"
@@ -196,6 +201,14 @@ def main() -> int:
     commit = source_commit()
     print("device=%s  commit=%s  reps=%d  variants=%s"
           % (dev, commit, args.reps, [v[0] for v in variants]), flush=True)
+    # THE MEASUREMENT LOCK, taken for the whole run. These runners spawn their
+    # children directly rather than through bench_core, so the lock has to be
+    # taken here: the quiet-window gate counts the cores used by processes
+    # that are NOT ours, and it cannot see two of our own measurements
+    # running beside each other -- which moves the numbers exactly as much as
+    # a neighbour's job does. The lock is released when the process exits.
+    _LOCK = bench_core.measurement_lock(label="unified_ablation")
+    _LOCK.__enter__()
 
     rows = []
     for rep in range(1, args.reps + 1):

@@ -490,6 +490,7 @@ impl HasCofacets for SparseDistanceMatrix {
         n: IndexT,
         binomial_coeff: &'a BinomialCoeffTable,
         modulus: CoefficientT,
+        threshold: ValueT,
     ) -> Self::Enumerator<'a> {
         crate::ripser::matrix::dense::SimplexCoboundaryEnumerator::new(
             simplex,
@@ -498,6 +499,7 @@ impl HasCofacets for SparseDistanceMatrix {
             self,
             binomial_coeff,
             modulus,
+            threshold,
         )
     }
 }

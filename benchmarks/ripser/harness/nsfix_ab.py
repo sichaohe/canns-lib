@@ -77,6 +77,8 @@ import numpy as np
 site, thresh, mode = sys.argv[1], float(sys.argv[2]), sys.argv[3]
 sys.path.insert(0, site)
 from canns_lib.ripser import ripser
+
+import bench_core
 d = np.load("/home/sichaohe/ph_work/ph_dm_1200.npy")
 np.fill_diagonal(d, 0.0)
 if mode == "capped":
@@ -108,9 +110,10 @@ print("H1TOP " + ",".join("%.2f" % x for x in life[:3]))
 def run(site: str, thresh: float, mode: str, timeout: int = 900):
     env = dict(os.environ)
     env["CANNS_RIPSER_STATS"] = "1"
-    p = subprocess.run([PY, "-c", CHILD, site, repr(thresh), mode],
-                       capture_output=True, text=True, env=env, timeout=timeout)
-    out = {}
+    p, foreign, foreign_max = bench_core.with_foreign(
+        subprocess.run, [PY, "-c", CHILD, site, repr(thresh), mode],
+        capture_output=True, text=True, env=env, timeout=timeout)
+    out = {"foreign_cpu": foreign, "foreign_max": foreign_max}
     for line in p.stdout.splitlines():
         if " " in line:
             k, _, v = line.partition(" ")
@@ -165,6 +168,8 @@ def main() -> int:
                     "gpu_err": r.get("gpu_err", ""),
                     "rc": r.get("rc", ""),
                     "host_elapsed_s": "%.3f" % (time.time() - t0),
+                    "foreign_cpu": r.get("foreign_cpu", ""),
+                    "foreign_max": r.get("foreign_max", ""),
                 }
                 if rec["gpu_err"]:
                     rec["verdict"] = "NOGPU"
@@ -178,7 +183,8 @@ def main() -> int:
                          rec["bars"], rec["verdict"]), flush=True)
 
     fields = ["rep", "arm", "mode", "thresh", "build", "wall_s", "rss_kb", "bars",
-              "md5", "h1top", "gpu_err", "verdict", "rc", "host_elapsed_s"]
+              "md5", "h1top", "gpu_err", "verdict", "rc", "host_elapsed_s",
+              "foreign_cpu", "foreign_max"]
     with open(args.out, "w", newline="") as fh:
         w = csv.DictWriter(fh, fieldnames=fields)
         w.writeheader()

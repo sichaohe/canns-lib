@@ -3,6 +3,104 @@ use crate::ripser::matrix::traits::{
 };
 use crate::ripser::types::{CoefficientT, DiameterEntryT, DiameterIndexT, IndexT, ValueT};
 use crate::ripser::utils::{modp, BinomialCoeffTable};
+use std::sync::OnceLock;
+
+/// How the cofacet enumerator may stop reading distances as soon as the
+/// running maximum is already above the threshold.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum EarlyExitMode {
+    /// The environment asked for it, whatever the data says.
+    ForcedOn,
+    /// The environment asked for the old behaviour.
+    ForcedOff,
+    /// The data decides.
+    Gated,
+}
+
+/// The fraction of the pairs the threshold REJECTS, in millionths.
+///
+/// WHAT DECIDES THE EARLY EXIT. The early exit saves the distance reads of
+/// the candidates the threshold rejects, and it costs one comparison per
+/// read. So it pays when the rejection rate is high, and it LOSES when the
+/// rejection rate is low -- measured on the 1,200-vertex scale-scan instance,
+/// where the matrix is 5.76 MB and every read is a cache hit:
+///
+/// | threshold | early exit off | early exit on | |
+/// |---|---|---|---|
+/// | T (the maximum finite distance) | 12.63 s | 14.67 s | 1.16x, a loss |
+/// | T/2 | 7.92 s | 10.48 s | 1.32x, a loss |
+/// | T/4 | 1.15 s | 1.04 s | 0.90x, a win |
+/// | T/10 | 0.65 s | 0.27 s | 0.41x, a win |
+///
+/// The same switch is 1.9x FASTER on `o3_4096`, where 98.7% of the
+/// candidates are rejected and the matrix is 33.5 MB, so every read it skips
+/// is a DRAM miss. The sign of the effect is therefore a property of the
+/// DATA, not of the code.
+///
+/// The fraction is the complement of the fraction of pairs the threshold
+/// keeps, which the algorithm layer knows exactly: it is the number of edges
+/// in the filtration against the number of pairs. It is set once per call,
+/// before the reduction starts.
+static REJECTION_FRACTION: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+
+/// The rejection rate above which the early exit pays for itself.
+///
+/// Measured on the benchmark host: the crossover sits between a rejection
+/// rate of about 40% (where the early exit loses 32%) and about 80% (where
+/// it wins 10%), on a matrix whose reads are cache hits. On a matrix whose
+/// reads are DRAM misses the crossover is much lower, which is the case the
+/// early exit was written for.
+const EARLY_EXIT_REJECTION_GATE: u32 = 700_000;
+
+/// The fraction of pairs the threshold rejects, as the gate sees it.
+///
+/// Reported in the STATS line, because the early exit's effect depends on it
+/// and a table that does not say which way the gate went cannot be read.
+pub fn rejection_fraction() -> f64 {
+    REJECTION_FRACTION.load(std::sync::atomic::Ordering::Relaxed) as f64 / 1_000_000.0
+}
+
+/// Whether the early exit is in force for this call.
+pub fn early_exit_active() -> bool {
+    early_exit_allowed()
+}
+
+/// Set the fraction of pairs the threshold rejects. Called by the algorithm
+/// layer, once per call, before the reduction.
+pub fn set_rejection_fraction(fraction: f64) {
+    let millionths = if fraction.is_finite() && fraction > 0.0 {
+        (fraction * 1_000_000.0).min(1_000_000.0) as u32
+    } else {
+        0
+    };
+    REJECTION_FRACTION.store(millionths, std::sync::atomic::Ordering::Relaxed);
+}
+
+/// Whether the early exit may stop reading distances early.
+///
+/// `CANNS_RIPSER_COFACET_EARLY_EXIT=0` restores the old behaviour of paying
+/// all `dim + 1` distance reads for every candidate; `=1` forces the early
+/// exit on whatever the data says, which is what the A/B table measures.
+/// With neither, the data decides.
+fn early_exit_allowed() -> bool {
+    static MODE: OnceLock<EarlyExitMode> = OnceLock::new();
+    let mode = *MODE.get_or_init(|| match std::env::var("CANNS_RIPSER_COFACET_EARLY_EXIT") {
+        Ok(v) => match v.trim() {
+            "0" | "false" | "False" | "no" | "No" | "off" | "OFF" => EarlyExitMode::ForcedOff,
+            "1" | "true" | "True" | "yes" | "Yes" | "on" | "ON" => EarlyExitMode::ForcedOn,
+            _ => EarlyExitMode::Gated,
+        },
+        Err(_) => EarlyExitMode::Gated,
+    });
+    match mode {
+        EarlyExitMode::ForcedOn => true,
+        EarlyExitMode::ForcedOff => false,
+        EarlyExitMode::Gated => {
+            REJECTION_FRACTION.load(std::sync::atomic::Ordering::Relaxed)
+                >= EARLY_EXIT_REJECTION_GATE
+        }
+    }
+}
 
 // Note: Removed ripser compatibility traits since we're eliminating ripser_old
 
@@ -236,6 +334,32 @@ where
     modulus: CoefficientT,
     dist: &'a M,
     binomial_coeff: &'a BinomialCoeffTable,
+    /// The value a distance has to reach for the cofacet to be rejected.
+    ///
+    /// ONE comparison per read, for both kinds of threshold:
+    ///
+    /// * a **finite** threshold `T`: the cofacet is rejected when a distance
+    ///   exceeds `T`, and `d >= next_up(T)` is exactly `d > T` for every
+    ///   finite `d` -- there is no float between `T` and `next_up(T)`. An
+    ///   infinite distance is above `T` as well, so the same comparison
+    ///   covers it.
+    /// * an **infinite** threshold: nothing exceeds infinity, so the only way
+    ///   a cofacet can be rejected is an infinite distance, and
+    ///   `d >= INFINITY` is exactly `d == INFINITY`.
+    ///
+    /// The second case is why the rejection test cannot simply be `d > T`:
+    /// with an infinite threshold that test is never true, so it would be pure
+    /// overhead on every single read -- and the corpus runs at threshold =
+    /// infinity, where the reads are cheap because the matrix is
+    /// cache-resident. Measured on the 1,200-vertex ASA matrix, the
+    /// two-comparison form made the run 7% SLOWER.
+    reject_at: ValueT,
+    /// Whether the early exit is enabled.
+    ///
+    /// The ablation arm turns it off, and it has to restore the OLD
+    /// behaviour EXACTLY: a partly-on early exit is not an ablation, it is
+    /// a third thing that no table describes.
+    early_exit: bool,
 }
 
 impl<M> CofacetEnumerator for SimplexCoboundaryEnumerator<'_, M>
@@ -276,10 +400,70 @@ where
         // the next; and prefetching 3 rows x 3 columns to serve 3 real loads is
         // a 3x instruction amplification that offsets any residual gain.
         // Latency in this loop is already covered by speculation.
+        //
+        // ⚠ BOTH of those experiments were run at n = 300..500, where the
+        // whole distance matrix is a few hundred KB and every load is a
+        // cache HIT. They therefore say nothing about the regime this loop
+        // actually runs in for a real dataset: at o3_4096 the matrix is
+        // 4096 points = 8.39M f32 = 33.5 MB, the rows are 16 KB apart, and
+        // the reads miss. The fix that DOES scale with the matrix size is not
+        // a better prefetch but FEWER READS -- see the early exit below.
         let mut cofacet_diameter = self.simplex.get_diameter();
-        for &w in &self.vertices[..self.num_vertices] {
-            let d = self.dist.get(self.v as usize, w as usize);
+        //
+        // THE LOOP'S STATE IS HOISTED OUT OF IT. `self.dist.get(...)` is a
+        // call through a shared reference, and the compiler cannot prove
+        // that it does not write through `self`, so every field the loop
+        // reads is reloaded from memory on every iteration -- and the loop
+        // body then carries a chain of load, max, compare, branch, where the
+        // branch waits for the max, which waits for the load. On a matrix
+        // that fits in cache that chain is the bottleneck: the early exit
+        // was measured 23% SLOWER on the 1,200-vertex scale-scan instance
+        // (5.76 MB, cache-resident) while being 1.9x faster on o3_4096
+        // (33.5 MB, every read a miss). A local cannot be aliased, so the
+        // values are copied out once and the compiler keeps them in
+        // registers.
+        let reject_at = self.reject_at;
+        let early_exit = self.early_exit;
+        let v = self.v as usize;
+        let vertices = &self.vertices[..self.num_vertices];
+        for &w in vertices {
+            let d = self.dist.get(v, w as usize);
             cofacet_diameter = cofacet_diameter.max(d);
+            // EARLY EXIT.
+            //
+            // Every caller of this enumerator keeps a cofacet only when its
+            // diameter is <= the threshold, and the true diameter is >= the
+            // running maximum. So once the running maximum is already above
+            // the threshold, the cofacet is rejected either way, and the
+            // remaining distances cannot change that verdict.
+            //
+            // This is not a rare case. At o3_4096 (4096 points, threshold
+            // 1.4) only 1.3% of the enumerated cofacet candidates are under
+            // the threshold, and the old code paid all dim+1 distance reads
+            // for every one of the other 98.7% -- each a scattered miss into
+            // a 33.5 MB matrix.
+            //
+            // THE COMPARISON IS ON THE DISTANCE, NOT ON THE RUNNING MAXIMUM.
+            // The two are the same test: the running maximum can only reach
+            // `reject_at` through a READ, because the simplex's own diameter
+            // is <= the threshold and `reject_at` is the next float above it
+            // (or infinity, which no finite simplex diameter reaches). So
+            // `d >= reject_at` fires exactly when the running maximum would
+            // have -- and it is ONE LINK SHORTER on the critical path: the
+            // branch waits for the load, not for the load and the max. The
+            // max is still computed, because the value returned is the
+            // partial maximum and every caller filters on the threshold
+            // before it uses the diameter.
+            //
+            if early_exit && d >= reject_at {
+                // ONE comparison, covering both rejections: a distance above
+                // a finite threshold, and an infinite distance under an
+                // infinite threshold. The diameter returned in that case is
+                // a partial maximum, but it is already above the threshold,
+                // so no caller can observe it: a caller that kept it would
+                // keep the exact diameter too.
+                break;
+            }
         }
 
         let cofacet_index =
@@ -320,6 +504,7 @@ where
         dist: &'a M,
         binomial_coeff: &'a BinomialCoeffTable,
         modulus: CoefficientT,
+        threshold: ValueT,
     ) -> Self {
         // Fill the simplex vertices into an inline stack buffer (no heap alloc).
         let mut vertices = [0 as IndexT; MAX_COFACET_SIMPLEX_VERTICES];
@@ -337,6 +522,16 @@ where
             modulus,
             dist,
             binomial_coeff,
+            reject_at: if threshold.is_finite() {
+                // The next float above the threshold: `d >= reject_at` is
+                // then exactly `d > threshold`.
+                f32::from_bits(threshold.to_bits() + 1)
+            } else {
+                // An infinite threshold rejects nothing except an infinite
+                // distance, and `d >= INFINITY` is exactly `d == INFINITY`.
+                f32::INFINITY
+            },
+            early_exit: early_exit_allowed(),
         }
     }
 }
@@ -421,8 +616,9 @@ impl<const LOWER: bool> HasCofacets for CompressedDistanceMatrix<LOWER> {
         n: IndexT,
         binomial_coeff: &'a BinomialCoeffTable,
         modulus: CoefficientT,
+        threshold: ValueT,
     ) -> Self::Enumerator<'a> {
-        SimplexCoboundaryEnumerator::new(simplex, dim, n, self, binomial_coeff, modulus)
+        SimplexCoboundaryEnumerator::new(simplex, dim, n, self, binomial_coeff, modulus, threshold)
     }
 }
 

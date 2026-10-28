@@ -34,7 +34,7 @@ dimension birth/death values on dense and sparse inputs).
 
 #### Performance vs `ripser.py` (v0.9.0)
 
-Measured by `benchmarks/ripser/comprehensive_benchmark.py --fast` (24
+Measured by `benchmarks/ripser/harness/comprehensive_benchmark.py --fast` (24
 dense point-cloud tests, n ∈ {50, 100, 150, 300}, maxdim ∈ {1, 2},
 categories: circle, sphere, torus, random, clusters, grid, swiss_roll,
 moons, circles). Cross-validated on **macOS arm64** and **Linux x86_64
@@ -398,13 +398,14 @@ python compare_ripser.py --n-points 100 --maxdim 2 --trials 5
 ```
 
 `benchmarks/ripser/` also carries the head-to-head harness against
-`ripser++`, the standard-suite runner, the load characterisation and their
-checkers. Each table is produced by a script, and each has a checker that
-derives its own grid and refuses a table that does not match it; see
-`benchmarks/ripser/RESULTS-20261020.md` for the table-to-checker map. The
-tables themselves are not in the repository -- the grid-cell corpus they
-draw on has an unsettled licence, and only the scripts and the aggregate
-characterisation are published until it is.
+`ripser++`, the standard-suite runner, the scale scan and the load
+characterisation of the grid-cell corpus. Each table is produced by a
+runner, and every row records the number of cores used by processes that
+are **not** ours while that row was measured, so a table measured on a busy
+host can be told apart from one that was not. The tables themselves are not
+in the repository -- the grid-cell corpus they draw on has an unsettled
+licence -- and they are kept in the experiment record next to the analysis
+that turns them into numbers.
 
 ## Technical Details
 
