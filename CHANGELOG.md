@@ -91,6 +91,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   threshold, or infinity for an infinite one -- and one comparison then
   covers both rejections, and the `-inf` case with them.
 
+  **And the switch is gated on the rejection rate**, because the
+  measurements say the sign of its effect is a property of the data: it is
+  1.9x faster where 98.7% of the candidates are rejected (`o3_4096`) and
+  16-32% slower where 30% are (the scale scan, the ASA matrix). See the
+  entry above on the rejection-rate gate.
+
 ### Changed
 - **The sync to the benchmark host now deletes what no longer exists here.**
   The host's tree is not a git checkout, so a file that was removed from this
